@@ -51,7 +51,7 @@
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<false/>
 	<key>UIStatusBarHidden</key>
-	<true/>
+	<false/>
 	<key>UIStatusBarStyle</key>
 	<string></string>
 	<key>UISupportedInterfaceOrientations~ipad</key>
