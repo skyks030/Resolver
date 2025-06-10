@@ -4,6 +4,14 @@
 <dict>
 	<key>files</key>
 	<dict>
+		<key>Resources/AppIcon.icns</key>
+		<data>
+		OgXCM2EwNtFHkrNlD64LxvWrArI=
+		</data>
+		<key>Resources/Assets.car</key>
+		<data>
+		R0FGpTTtlamdayPNSdWysrBP8ak=
+		</data>
 		<key>Resources/Info.plist</key>
 		<data>
 		shS7UQbEbUL8TZdOYZKQw4axSC8=
@@ -16,9 +24,39 @@
 		<data>
 		pIEGxtKjqWjVu8gG9aQaBWpf93o=
 		</data>
+		<key>Resources/find-clip.py</key>
+		<data>
+		KH7oLMSfFPFJZxxXUYJZaKp6mMg=
+		</data>
+		<key>Resources/render-done-simon.py</key>
+		<data>
+		14wojr+6lBDAhKUT2T7C9xic7so=
+		</data>
+		<key>Resources/render-done-sky.py</key>
+		<data>
+		ta9aW6bs3Fl/e9AlYpImCGZinC8=
+		</data>
+		<key>Resources/transcribe.py</key>
+		<data>
+		Oq1hXU1mt8K8VkwGmU2skYfumf4=
+		</data>
 	</dict>
 	<key>files2</key>
 	<dict>
+		<key>Resources/AppIcon.icns</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			Wqp9PjbY2G224Wxn+sr8SJFJcRMlc5tLS8ZJ1D4Ea0M=
+			</data>
+		</dict>
+		<key>Resources/Assets.car</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			P1ZSFY4j+BP25MTFbWgxD6vtM9yzfhXqOBfy4EvsgEo=
+			</data>
+		</dict>
 		<key>Resources/Info.plist</key>
 		<dict>
 			<key>hash2</key>
@@ -38,6 +76,34 @@
 			<key>hash2</key>
 			<data>
 			zZzVkPjUnZJJg9Ix7XJY6GdnRl4oaSy9QTmzyn2Lm8s=
+			</data>
+		</dict>
+		<key>Resources/find-clip.py</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			iBxzGTrBUkhEdweJjtEWV8iPLbrnFXhSy71Da0WHvII=
+			</data>
+		</dict>
+		<key>Resources/render-done-simon.py</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			U7Bm7Jsf4AxbZ8EQYSfMaFPFG1HAQ35yiO5JMcsAxas=
+			</data>
+		</dict>
+		<key>Resources/render-done-sky.py</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			i6ko3Y2il/j226attxF2e8gwxJj7b+yGx5elVowDh4c=
+			</data>
+		</dict>
+		<key>Resources/transcribe.py</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			6nyWgO43ZBzWMZZxCpGZpACTW9zDLmrYHDznevfe5P0=
 			</data>
 		</dict>
 	</dict>
