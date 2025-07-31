@@ -6,7 +6,7 @@ struct ResolverApp: App {
         UpdateChecker.runUpdateCheck(showOutput: false)
         }
     var body: some Scene {
-        MenuBarExtra("Resolver", systemImage: "pill.fill") { //cup.and.heat.waves.fill //cup.and.heat.waves
+        MenuBarExtra("Resolver", systemImage: "die.face.6.fill") { //cup.and.heat.waves.fill //cup.and.heat.waves
             DropDownMenu()
         }
         .menuBarExtraStyle(.menu)
