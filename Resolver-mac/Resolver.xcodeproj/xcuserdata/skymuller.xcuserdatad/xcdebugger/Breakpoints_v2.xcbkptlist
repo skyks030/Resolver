@@ -68,5 +68,51 @@
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "1DC6F7DA-FABE-4888-9A18-9ED74436BDD5"
+            shouldBeEnabled = "Yes"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "Resolver/UpdateChecker.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "11"
+            endingLineNumber = "11"
+            landmarkName = "runUpdateCheck(showOutput:)"
+            landmarkType = "7">
+            <Locations>
+               <Location
+                  uuid = "1DC6F7DA-FABE-4888-9A18-9ED74436BDD5 - ffbc75fadb05e5cc"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "static Resolver.UpdateChecker.runUpdateCheck(showOutput: Swift.Bool) -&gt; ()"
+                  moduleName = "Resolver.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/skymuller/Git/Resolver/Resolver-mac/Resolver/UpdateChecker.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "11"
+                  endingLineNumber = "11">
+               </Location>
+               <Location
+                  uuid = "1DC6F7DA-FABE-4888-9A18-9ED74436BDD5 - 3b37d29afea43d9c"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "closure #1 (Swift.Bool, Swift.String, Swift.String) -&gt; () in static Resolver.UpdateChecker.runUpdateCheck(showOutput: Swift.Bool) -&gt; ()"
+                  moduleName = "Resolver.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/skymuller/Git/Resolver/Resolver-mac/Resolver/UpdateChecker.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "12"
+                  endingLineNumber = "12">
+               </Location>
+            </Locations>
+         </BreakpointContent>
+      </BreakpointProxy>
    </Breakpoints>
 </Bucket>

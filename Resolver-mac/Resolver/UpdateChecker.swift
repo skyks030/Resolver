@@ -3,8 +3,8 @@ import AppKit
 
 final class UpdateChecker {
     // MARK: - Konfiguration
-    static let versionFileURLString = "https://raw.githubusercontent.com/skyks030/Resolver/main/version.txt"
-    static let downloadURLString = "https://raw.githubusercontent.com/skyks030/Resolver/main/build/Resolver.dmg"
+    static let versionFileURLString = "https://raw.githubusercontent.com/skyks030/Resolver/main/Build/version.txt"
+    static let downloadURLString = "https://raw.githubusercontent.com/skyks030/Resolver/main/Build/Resolver.dmg"
 
     // MARK: - Öffentliche Methode
     static func runUpdateCheck(showOutput: Bool = false) {
