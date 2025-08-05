@@ -3,6 +3,8 @@
 import sys
 import os
 import importlib.util
+import csv
+import tempfile
 
 # === Pfad zur DaVinci Resolve Scripting API (macOS) ===
 sdk_path = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules"
@@ -34,10 +36,11 @@ if not project or not timeline:
 
 timeline_name = timeline.GetName()
 timeline_start_frame = timeline.GetStartFrame()
+frame_rate = timeline.GetSetting("timelineFrameRate")
 
 # === Bestehende Marker entfernen ===
-timeline.DeleteMarkersByColor("All")
-print("✅ Alle Timeline-Marker gelöscht.")
+#timeline.DeleteMarkersByColor("All")
+#print("✅ Alle Timeline-Marker gelöscht.")
 
 
 # === Zur Color Page wechseln ===
@@ -56,7 +59,7 @@ track_count = timeline.GetTrackCount("video")
 group_number = 1  # Startet bei 1 → ergibt 0010
 
 
-
+print (f"VFX-Name,Rec-TC-In,Rec-TC-Out,File-Names")
 
 for clip in clips_v1:
     clip_start = clip.GetStart()
@@ -64,25 +67,36 @@ for clip in clips_v1:
 
     relative_start = clip_start - timeline_start_frame
     relative_end = clip_end - timeline_start_frame
+    
+    rec_tc_in = "{:02}:{:02}:{:02}:{:02}".format(
+    int(clip_start // (3600 * frame_rate)),
+    int((clip_start % (3600 * frame_rate)) // (60 * frame_rate)),
+    int((clip_start % (60 * frame_rate)) // frame_rate),
+    int(clip_start % frame_rate)
+    )
+    rec_tc_out = "{:02}:{:02}:{:02}:{:02}".format(
+    int(clip_end // (3600 * frame_rate)),
+    int((clip_end % (3600 * frame_rate)) // (60 * frame_rate)),
+    int((clip_end % (60 * frame_rate)) // frame_rate),
+    int(clip_end % frame_rate)
+    )
 
     # Gruppennamen mit laufender Nummerierung in Zehnerschritten
     suffix = str(group_number * 10).zfill(4)
     group_name = f"{timeline_name}_{suffix}"
     group_number += 1
+    #print({group_number},{group_name})
 
     # Gruppe erstellen
     color_group = project.AddColorGroup(group_name)
-    print()
-    print(f"VFX-Clip: {group_name}")
     if not color_group:
-        print(f"❌ Gruppe '{group_name}' konnte nicht erstellt werden.")
-        continue
+        print("❌ Gruppe konnte nicht erstellt werden. ")
+        sys.exit(1)
 
 
     # Timeline-Marker setzen
-    timeline.AddMarker(relative_start, "Green", "Start", group_name + " Start", 1)
-    timeline.AddMarker(relative_end - 1, "Red", "Ende", group_name + " Ende", 1)
-    print(f"    Start: {relative_start}, Ende: {relative_end - 1}")
+    timeline.AddMarker(relative_start, "Green", "VFX start", group_name, 1)
+    timeline.AddMarker(relative_end - 1, "Red", "VFX end", group_name, 1)
 
     # Alle Clips aus allen Videospuren analysieren
     group_clips = []
@@ -98,6 +112,12 @@ for clip in clips_v1:
 
     for item in group_clips:
         item.AssignToColorGroup(color_group)
-        print(f"    {item.GetName()}")
+
+
+    clip_file_names = ",".join([item.GetName() for item in group_clips])
+    #source_tc_in = "\n".join([clip.GetStartTimecode() for item in group_clips])
+    #source_tc_out = "\n".join([clip.GetEndTimecode() for item in group_clips])
+
+    print(f"{group_name},{rec_tc_in},{rec_tc_out},{clip_file_names}")
 
 resolve.OpenPage("edit")

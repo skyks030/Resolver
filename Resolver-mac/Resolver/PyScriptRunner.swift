@@ -2,7 +2,7 @@ import Foundation
 import AppKit
 
 class PyScriptRunner {
-    static func run(scriptName: String, showOutput: Bool = false) {
+    static func run(scriptName: String, showOutput: Bool = false, enableDownload: Bool = false) {
         guard let scriptURL = Bundle.main.url(forResource: scriptName, withExtension: "py") else {
             print("❌ Skript nicht gefunden.")
             return
@@ -21,7 +21,7 @@ class PyScriptRunner {
                 task.waitUntilExit()
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 if let output = String(data: data, encoding: .utf8) {
-                    showOutputWindow(output)
+                    showOutputWindow(output, enableDownload: enableDownload)
                 }
             } catch {
                 print("❌ Fehler: \(error.localizedDescription)")
@@ -32,12 +32,34 @@ class PyScriptRunner {
             }
         }
     }
-
-    private static func showOutputWindow(_ output: String) {
+    
+    private static func showOutputWindow(_ output: String, enableDownload: Bool) {
         let alert = NSAlert()
         alert.messageText = "Resolver:"
         alert.informativeText = output
         alert.addButton(withTitle: "OK")
-        alert.runModal()
+
+        if enableDownload {
+            alert.addButton(withTitle: "Herunterladen")
+        }
+
+        let response = alert.runModal()
+
+        if enableDownload && response == .alertSecondButtonReturn {
+            let panel = NSSavePanel()
+            panel.title = "Speichere CSV-Ausgabe"
+            panel.allowedContentTypes = [.commaSeparatedText]
+            panel.nameFieldStringValue = "output.csv"
+
+            if panel.runModal() == .OK, let url = panel.url {
+                do {
+                    try output.write(to: url, atomically: true, encoding: .utf8)
+                    print("✅ CSV gespeichert: \(url.path)")
+                } catch {
+                    print("❌ Fehler beim Speichern der Datei: \(error.localizedDescription)")
+                }
+            }
+        }
     }
 }
+    

@@ -3,6 +3,7 @@ import SwiftUI
 
 struct DropDownMenu: View {
     @State private var showOutput = true
+    @State private var enableDownload = true
     
     var body: some View {
         VStack(spacing: 10){
@@ -10,7 +11,7 @@ struct DropDownMenu: View {
             Menu("Resolve") {
                 Menu("VFX"){
                     HoverButton(title: "Clip Grouping") {
-                        PyScriptRunner.run(scriptName: "clip-grouping", showOutput: showOutput)
+                        PyScriptRunner.run(scriptName: "clip-grouping", showOutput: showOutput, enableDownload: enableDownload)
                     }
                     HoverButton(title: "Clear Groups") {
                         PyScriptRunner.run(scriptName: "clear-groups", showOutput: showOutput)
