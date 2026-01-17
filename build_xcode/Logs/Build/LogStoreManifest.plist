@@ -6,7 +6,7 @@
 	<integer>11</integer>
 	<key>logs</key>
 	<dict>
-		<key>453C2AED-C488-46A2-8F33-EB97FFF025E4</key>
+		<key>53E36F5B-2802-466D-AD14-57182A555A77</key>
 		<dict>
 			<key>className</key>
 			<string>IDECommandLineBuildLog</string>
@@ -15,7 +15,7 @@
 			<key>domainType</key>
 			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
 			<key>fileName</key>
-			<string>453C2AED-C488-46A2-8F33-EB97FFF025E4.xcactivitylog</string>
+			<string>53E36F5B-2802-466D-AD14-57182A555A77.xcactivitylog</string>
 			<key>hasPrimaryLog</key>
 			<true/>
 			<key>primaryObservable</key>
@@ -40,15 +40,15 @@
 			<key>signature</key>
 			<string>Cleaning project Resolver with scheme Resolver and configuration Release</string>
 			<key>timeStartedRecording</key>
-			<real>790370779.66684794</real>
+			<real>790370868.25225306</real>
 			<key>timeStoppedRecording</key>
-			<real>790370779.90245903</real>
+			<real>790370868.55596697</real>
 			<key>title</key>
 			<string>Cleaning project Resolver with scheme Resolver and configuration Release</string>
 			<key>uniqueIdentifier</key>
-			<string>453C2AED-C488-46A2-8F33-EB97FFF025E4</string>
+			<string>53E36F5B-2802-466D-AD14-57182A555A77</string>
 		</dict>
-		<key>E5E14DF7-FF4A-44F3-9860-49E9F9FF7B46</key>
+		<key>A9C6C9C8-0E76-43B3-8306-03AEC9A560B3</key>
 		<dict>
 			<key>className</key>
 			<string>IDECommandLineBuildLog</string>
@@ -57,7 +57,7 @@
 			<key>domainType</key>
 			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
 			<key>fileName</key>
-			<string>E5E14DF7-FF4A-44F3-9860-49E9F9FF7B46.xcactivitylog</string>
+			<string>A9C6C9C8-0E76-43B3-8306-03AEC9A560B3.xcactivitylog</string>
 			<key>hasPrimaryLog</key>
 			<true/>
 			<key>primaryObservable</key>
@@ -82,13 +82,13 @@
 			<key>signature</key>
 			<string>Cleaning project Resolver with scheme Resolver and configuration Release</string>
 			<key>timeStartedRecording</key>
-			<real>790370689.16866302</real>
+			<real>790370811.71311498</real>
 			<key>timeStoppedRecording</key>
-			<real>790370689.47289395</real>
+			<real>790370811.96179104</real>
 			<key>title</key>
 			<string>Cleaning project Resolver with scheme Resolver and configuration Release</string>
 			<key>uniqueIdentifier</key>
-			<string>E5E14DF7-FF4A-44F3-9860-49E9F9FF7B46</string>
+			<string>A9C6C9C8-0E76-43B3-8306-03AEC9A560B3</string>
 		</dict>
 	</dict>
 </dict>

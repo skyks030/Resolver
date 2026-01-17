@@ -109,7 +109,7 @@ final class UpdateChecker {
 
             do {
                 let downloadsURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
-                let destinationURL = downloadsURL.appendingPathComponent(url.lastPathComponent)
+                let destinationURL = downloadsURL.appendingPathComponent("Resolver_Update.dmg")
 
                 if FileManager.default.fileExists(atPath: destinationURL.path) {
                     try FileManager.default.removeItem(at: destinationURL)
@@ -117,16 +117,8 @@ final class UpdateChecker {
 
                 try FileManager.default.moveItem(at: tempURL, to: destinationURL)
 
-                //let appName = destinationURL.deletingPathExtension().lastPathComponent
-
                 DispatchQueue.main.async {
-                    // Optional: Öffnen der heruntergeladenen .dmg im Finder
-                    let success = NSWorkspace.shared.open(destinationURL)
-                    if success {
-                        exit(0)
-                    } else {
-                        showAlert(message: "⚠️ Update geladen, aber Öffnen der .dmg fehlgeschlagen.")
-                    }
+                    installUpdate(dmgPath: destinationURL.path)
                 }
 
             } catch {
@@ -137,21 +129,62 @@ final class UpdateChecker {
         }.resume()
     }
 
-    // MARK: - App ersetzen
-    private static func replaceExistingApp(with newAppURL: URL, appName: String) {
-        let fileManager = FileManager.default
-        let applicationsURL = URL(fileURLWithPath: "/Applications")
-        let targetAppURL = applicationsURL.appendingPathComponent("\(appName).app")
+    // MARK: - Installations-Skript ausführen
+    private static func installUpdate(dmgPath: String) {
+        let script = """
+        #!/bin/bash
+        DMG_PATH="\(dmgPath)"
+        MOUNT_POINT="/tmp/ResolverUpdateMount"
+        APP_NAME="Resolver.app"
+        TARGET_APP="/Applications/$APP_NAME"
 
+        # Warten, bis App geschlossen ist (optional, aber sicher)
+        sleep 1
+
+        echo "Mounting DMG..."
+        hdiutil attach "$DMG_PATH" -mountpoint "$MOUNT_POINT" -nobrowse -quiet
+
+        if [ -d "$MOUNT_POINT/$APP_NAME" ]; then
+            echo "Removing old app..."
+            rm -rf "$TARGET_APP"
+            
+            echo "Copying new app..."
+            cp -R "$MOUNT_POINT/$APP_NAME" /Applications/
+            
+            echo "Unmounting..."
+            hdiutil detach "$MOUNT_POINT" -quiet
+            
+            echo "Relaunching..."
+            open "$TARGET_APP"
+        else
+            echo "❌ App in DMG not found!"
+            hdiutil detach "$MOUNT_POINT" -quiet
+            open "$DMG_PATH" # Fallback: DMG öffnen
+        fi
+        """
+
+        let scriptPath = "/tmp/resolver_update.sh"
+        
         do {
-            if fileManager.fileExists(atPath: targetAppURL.path) {
-                try fileManager.trashItem(at: targetAppURL, resultingItemURL: nil)
-            }
+            try script.write(toFile: scriptPath, atomically: true, encoding: .utf8)
+            
+            // Skript ausführbar machen
+            let chmod = Process()
+            chmod.executableURL = URL(fileURLWithPath: "/bin/chmod")
+            chmod.arguments = ["+x", scriptPath]
+            try chmod.run()
+            chmod.waitUntilExit()
 
-            try fileManager.copyItem(at: newAppURL, to: targetAppURL)
-            NSWorkspace.shared.open(targetAppURL)
+            // Skript im Hintergrund starten und App beenden
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/bash")
+            process.arguments = [scriptPath]
+            try process.run()
+            
+            NSApp.terminate(nil)
+            
         } catch {
-            showAlert(message: "❌ Fehler beim Ersetzen der App: \(error.localizedDescription)")
+            showAlert(message: "❌ Fehler beim Starten des Updates: \(error.localizedDescription)")
         }
     }
 

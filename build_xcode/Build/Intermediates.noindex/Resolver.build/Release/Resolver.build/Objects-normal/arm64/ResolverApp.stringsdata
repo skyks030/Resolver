@@ -1,0 +1,16 @@
+{
+  "source": "/Users/skymuller/Git/Resolver/Resolver-mac/Resolver/ResolverApp.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Resolver",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 9
+        }
+      }
+    ]
+  },
+  "version": 1
+}
