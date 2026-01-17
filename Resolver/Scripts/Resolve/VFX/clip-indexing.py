@@ -113,8 +113,8 @@ for clip in videospur:
         relative_start = clip_start - timeline_start_frame
         relative_end = clip_end - timeline_start_frame
         
-        timeline.AddMarker(relative_start, "Green", "VFX In", vfx_final_name, 1)
-        timeline.AddMarker(relative_end - 1, "Red", "VFX Out", vfx_final_name, 1)
+        timeline.AddMarker(relative_start, "Green", "In", vfx_final_name + " | Resolver-Vfx-Marker", 1)
+        timeline.AddMarker(relative_end - 1, "Red", "Out", vfx_final_name + " | Resolver-Vfx-Marker", 1)
         
         # Output generieren
         

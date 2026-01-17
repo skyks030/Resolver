@@ -8,6 +8,7 @@ struct DropDownMenu: View {
     // VFX Input State
     @State private var showVfxInput = false
     @State private var vfxTrack = ""
+    @State private var showMarkerMgmt = false
     
     var body: some View {
         VStack(spacing: 10) {
@@ -54,15 +55,45 @@ struct DropDownMenu: View {
                 .transition(.opacity)
                 
                 
+            } else if showMarkerMgmt {
+                // Marker Management View
+                VStack(spacing: 8) {
+                    Text("Marker Management")
+                        .font(.headline)
+                    
+                    Text("Delete all Resolver created markers?")
+                        .font(.caption)
+                        .multilineTextAlignment(.center)
+                        .foregroundColor(.secondary)
+                    
+                    Button("Delete All VFX Markers") {
+                        PyScriptRunner.run(scriptName: "clean-markers", showOutput: showOutput, enableDownload: false)
+                        withAnimation { showMarkerMgmt = false }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                    
+                    Button("Cancel") {
+                        withAnimation { showMarkerMgmt = false }
+                    }
+                }
+                .padding()
+                .transition(.opacity)
+
             } else {
                 // Main Menu View
                 HoverButton(title: "VFX") {
                     withAnimation { showVfxInput = true }
                 }
                 
+                HoverButton(title: "Marker Management") {
+                    withAnimation { showMarkerMgmt = true }
+                }
+                
                 Divider()
                 
                 HStack {
+
                     // Version Info on the left
                     if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
                         Text("v\(version)")
