@@ -58,22 +58,14 @@ echo "Creating Styled DMG..."
 DMG_STAGING="$BUILD_OUTPUT_DIR/dmg_staging"
 DMG_TMP="$BUILD_OUTPUT_DIR/Resolver_rw.dmg"
 DMG_FINAL="$BUILD_OUTPUT_DIR/Resolver.dmg"
-BACKGROUND_IMG="$PROJECT_DIR/Resolver/Assets.xcassets/AppIcon.appiconset/97531_512.png"
 
 # Clean up previous runs
 rm -rf "$DMG_STAGING" "$DMG_TMP" "$DMG_FINAL"
 
 # 5.1 Prepare Staging Area
-mkdir -p "$DMG_STAGING/.background"
+mkdir -p "$DMG_STAGING"
 cp -R "$APP_PATH" "$DMG_STAGING/"
 ln -s /Applications "$DMG_STAGING/Applications"
-
-# Copy background image if it exists
-if [ -f "$BACKGROUND_IMG" ]; then
-    cp "$BACKGROUND_IMG" "$DMG_STAGING/.background/background.png"
-else
-    echo "Warning: Background image not found at $BACKGROUND_IMG"
-fi
 
 # 5.2 Create Temporary Read-Write DMG
 hdiutil create -volname "Resolver" -srcfolder "$DMG_STAGING" -ov -format UDRW "$DMG_TMP"
@@ -91,14 +83,13 @@ tell application "Finder"
         set current view of container window to icon view
         set toolbar visible of container window to false
         set statusbar visible of container window to false
-        set the bounds of container window to {400, 100, 912, 612}
+        set the bounds of container window to {400, 100, 800, 400}
         set theViewOptions to the icon view options of container window
         set arrangement of theViewOptions to not arranged
-        set icon size of theViewOptions to 144
-        set background picture of theViewOptions to file ".background:background.png"
+        set icon size of theViewOptions to 100
         make new alias file at container window to file "Applications" with properties {name:"Applications"}
-        set position of item "Resolver" of container window to {140, 256}
-        set position of item "Applications" of container window to {372, 256}
+        set position of item "Resolver" of container window to {120, 150}
+        set position of item "Applications" of container window to {280, 150}
         close
         open
         update without registering applications
