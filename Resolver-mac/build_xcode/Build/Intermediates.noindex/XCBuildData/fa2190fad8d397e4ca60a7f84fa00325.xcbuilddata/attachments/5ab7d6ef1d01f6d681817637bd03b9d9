@@ -1,0 +1,55 @@
+{
+  "" : {
+    "const-values" : "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/Objects-normal/arm64/Resolver-master.swiftconstvalues",
+    "dependencies" : "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/Objects-normal/arm64/Resolver-master.d",
+    "diagnostics" : "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/Objects-normal/arm64/Resolver-master.dia",
+    "emit-module-dependencies" : "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/Objects-normal/arm64/Resolver-master-emit-module.d",
+    "emit-module-diagnostics" : "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/Objects-normal/arm64/Resolver-master-emit-module.dia",
+    "swift-dependencies" : "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/Objects-normal/arm64/Resolver-master.swiftdeps"
+  },
+  "/Users/skymuller/Git/Resolver/Resolver-mac/Resolver/AppDelegate.swift" : {
+    "index-unit-output-path" : "/Resolver.build/Release/Resolver.build/Objects-normal/arm64/AppDelegate.o",
+    "llvm-bc" : "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/Objects-normal/arm64/AppDelegate.bc",
+    "object" : "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/Objects-normal/arm64/AppDelegate.o"
+  },
+  "/Users/skymuller/Git/Resolver/Resolver-mac/Resolver/DropDownMenu.swift" : {
+    "index-unit-output-path" : "/Resolver.build/Release/Resolver.build/Objects-normal/arm64/DropDownMenu.o",
+    "llvm-bc" : "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/Objects-normal/arm64/DropDownMenu.bc",
+    "object" : "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/Objects-normal/arm64/DropDownMenu.o"
+  },
+  "/Users/skymuller/Git/Resolver/Resolver-mac/Resolver/HoverButton.swift" : {
+    "index-unit-output-path" : "/Resolver.build/Release/Resolver.build/Objects-normal/arm64/HoverButton.o",
+    "llvm-bc" : "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/Objects-normal/arm64/HoverButton.bc",
+    "object" : "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/Objects-normal/arm64/HoverButton.o"
+  },
+  "/Users/skymuller/Git/Resolver/Resolver-mac/Resolver/PyScriptRunner.swift" : {
+    "index-unit-output-path" : "/Resolver.build/Release/Resolver.build/Objects-normal/arm64/PyScriptRunner.o",
+    "llvm-bc" : "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/Objects-normal/arm64/PyScriptRunner.bc",
+    "object" : "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/Objects-normal/arm64/PyScriptRunner.o"
+  },
+  "/Users/skymuller/Git/Resolver/Resolver-mac/Resolver/ResolverApp.swift" : {
+    "index-unit-output-path" : "/Resolver.build/Release/Resolver.build/Objects-normal/arm64/ResolverApp.o",
+    "llvm-bc" : "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/Objects-normal/arm64/ResolverApp.bc",
+    "object" : "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/Objects-normal/arm64/ResolverApp.o"
+  },
+  "/Users/skymuller/Git/Resolver/Resolver-mac/Resolver/Scripts/Resolve/render-done/send-webhook.swift" : {
+    "index-unit-output-path" : "/Resolver.build/Release/Resolver.build/Objects-normal/arm64/send-webhook.o",
+    "llvm-bc" : "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/Objects-normal/arm64/send-webhook.bc",
+    "object" : "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/Objects-normal/arm64/send-webhook.o"
+  },
+  "/Users/skymuller/Git/Resolver/Resolver-mac/Resolver/UpdateChecker.swift" : {
+    "index-unit-output-path" : "/Resolver.build/Release/Resolver.build/Objects-normal/arm64/UpdateChecker.o",
+    "llvm-bc" : "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/Objects-normal/arm64/UpdateChecker.bc",
+    "object" : "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/Objects-normal/arm64/UpdateChecker.o"
+  },
+  "/Users/skymuller/Git/Resolver/Resolver-mac/Resolver/UserManager.swift" : {
+    "index-unit-output-path" : "/Resolver.build/Release/Resolver.build/Objects-normal/arm64/UserManager.o",
+    "llvm-bc" : "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/Objects-normal/arm64/UserManager.bc",
+    "object" : "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/Objects-normal/arm64/UserManager.o"
+  },
+  "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/DerivedSources/GeneratedAssetSymbols.swift" : {
+    "index-unit-output-path" : "/Resolver.build/Release/Resolver.build/Objects-normal/arm64/GeneratedAssetSymbols.o",
+    "llvm-bc" : "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/Objects-normal/arm64/GeneratedAssetSymbols.bc",
+    "object" : "/Users/skymuller/Git/Resolver/Resolver-mac/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/Objects-normal/arm64/GeneratedAssetSymbols.o"
+  }
+}

@@ -3,8 +3,18 @@ import AppKit
 
 class PyScriptRunner {
     static func run(scriptName: String, showOutput: Bool = false, enableDownload: Bool = false) {
-        guard let scriptURL = Bundle.main.url(forResource: scriptName, withExtension: "py") else {
-            print("❌ Skript nicht gefunden.")
+
+        // Dev Mode: Check if local file exists
+        let devScriptPath = "/Users/skymuller/Git/Resolver/Resolver-mac/Resolver/Scripts/\(scriptName).py"
+        let scriptURL: URL
+        
+        if FileManager.default.fileExists(atPath: devScriptPath) {
+            print("🔧 Dev-Mode: Nutze lokales Skript \(devScriptPath)")
+            scriptURL = URL(fileURLWithPath: devScriptPath)
+        } else if let bundleURL = Bundle.main.url(forResource: scriptName, withExtension: "py") {
+            scriptURL = bundleURL
+        } else {
+            print("❌ Skript nicht gefunden: \(scriptName)")
             return
         }
 

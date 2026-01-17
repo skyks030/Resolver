@@ -8,17 +8,24 @@ import time
 import urllib.request
 import ssl
 
-def ssl_check_webhook():
-    test_url = "https://prod-52.westeurope.logic.azure.com:443/workflows/b3e5ac260605402d993614b3ae30047f/triggers/manual/paths/invoke?api-version=2016-06-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=8rVW6W0GQkEidvHA6KwTw9yh3FPGnFPoftEQJ0Tan6M"  # dein Webhook
+def ssl_check_via_https():
     try:
-        with urllib.request.urlopen(test_url, timeout=5) as response:
-            return True
-    except Exception as e:
-        print(f"❌ Webhook nicht erreichbar: {e}")
-        print("🚨 Deine Python-Installation scheint keine gültigen SSL-Zertifikate zu haben.")
-        print("Bitte führe folgendes Skript einmalig aus:\n")
-        print("/Applications/Python\ 3.*/Install\ Certificates.command")
+        with urllib.request.urlopen("https://www.google.com", timeout=5) as response:
+            return response.status == 200
+    except ssl.SSLError as e:
+        print(f"❌ SSL-Fehler: {e}")
         return False
+    except Exception as e:
+        print(f"⚠️ Verbindungsfehler (nicht SSL-spezifisch): {e}")
+        return False
+
+# Beispielverwendung
+if not ssl_check_via_https():
+    print("🚨 Deine Python-Installation scheint keine gültigen SSL-Zertifikate zu haben.")
+    print("Bitte führe folgendes Skript einmalig aus")
+    print("which python3")
+    print("/Applications/Python\ 3.*/Install\ Certificates.command")
+    exit(1)
 
 
 
@@ -59,7 +66,7 @@ import json
 from urllib.parse import urlparse
 
 # === HIER DEIN WEBHOOK EINTRAGEN ===
-WEBHOOK_URL = "https://prod-52.westeurope.logic.azure.com:443/workflows/b3e5ac260605402d993614b3ae30047f/triggers/manual/paths/invoke?api-version=2016-06-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=8rVW6W0GQkEidvHA6KwTw9yh3FPGnFPoftEQJ0Tan6M"
+WEBHOOK_URL = "https://prod-132.westeurope.logic.azure.com:443/workflows/0e729775c9934cdc8f977c11e8699b25/triggers/manual/paths/invoke?api-version=2016-06-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=KPyErjK1CNb3iTpD3N_auMDYTF95xjSe7uaCfzfUSrE"
 
 def send_teams_message(message):
     url = urlparse(WEBHOOK_URL)
@@ -71,17 +78,12 @@ def send_teams_message(message):
     try:
         conn.request("POST", url.path + "?" + url.query, body, headers)
         response = conn.getresponse()
-        print(f"✅ Nachricht gesendet: {response.status} {response.reason}")
+        print(f"✅ Nachricht gesendet")
     except Exception as e:
         print(f"❌ Fehler beim Senden: {e}")
     finally:
         conn.close()
 
-# Beispiel: Nachricht senden
-send_teams_message("✅ Dein Render ist abgeschlossen!")
+WaitForRenderingCompletion(resolve)
 
-
-
-#WaitForRenderingCompletion(resolve)
-
-send_teams_message("✅ Dies ist eine Test-Push-Benachrichtigung zum automatischen Senden bei erfolgreichem Beenden eines Renders in DaVinci Resolve.")
+send_teams_message("✅ Done.")

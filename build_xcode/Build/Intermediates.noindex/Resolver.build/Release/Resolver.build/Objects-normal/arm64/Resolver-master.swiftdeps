@@ -1,0 +1,15 @@
+version: "Apple Swift version 6.1.2 (swiftlang-6.1.2.1.2 clang-1700.0.13.5)"
+options: "07e4ce23e285464d8ddb04fe4b2e39aa4489e7a7c85425ba75a9c2cd86ac0bf8"
+build_start_time: [1768677980, 432374000]
+build_end_time: [1768677980, 885288000]
+inputs:
+  "/Users/skymuller/Git/Resolver/Resolver-mac/Resolver/AppDelegate.swift": !dirty [1754005168, 598747551]
+  "/Users/skymuller/Git/Resolver/Resolver-mac/Resolver/DropDownMenu.swift": !dirty [1754603218, 395979406]
+  "/Users/skymuller/Git/Resolver/Resolver-mac/Resolver/HoverButton.swift": !dirty [1749377554, 167708311]
+  "/Users/skymuller/Git/Resolver/Resolver-mac/Resolver/PyScriptRunner.swift": !dirty [1768677254, 572229152]
+  "/Users/skymuller/Git/Resolver/Resolver-mac/Resolver/ResolverApp.swift": !dirty [1754004674, 307833041]
+  "/Users/skymuller/Git/Resolver/Resolver-mac/Resolver/Scripts/Resolve/render-done/send-webhook.swift": !dirty [1755003767, 437173390]
+  "/Users/skymuller/Git/Resolver/Resolver-mac/Resolver/UpdateChecker.swift": !dirty [1754003834, 86910991]
+  "/Users/skymuller/Git/Resolver/Resolver-mac/Resolver/UserManager.swift": !dirty [1753429853, 51268183]
+  ? "/Users/skymuller/Git/Resolver/build_xcode/Build/Intermediates.noindex/Resolver.build/Release/Resolver.build/DerivedSources/GeneratedAssetSymbols.swift"
+  : !dirty [1768677980, 220140112]
