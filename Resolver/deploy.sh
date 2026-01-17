@@ -36,8 +36,8 @@ sed -i '' "s/CURRENT_PROJECT_VERSION = .*;/CURRENT_PROJECT_VERSION = $new_versio
 
 # 4. Build the App
 echo "Building Resolver (Release)..."
-# Run xcodebuild from the project root
-(cd "$PROJECT_DIR" && xcodebuild -scheme Resolver -configuration Release -derivedDataPath "$DERIVED_DATA_DIR" clean build)
+# Run xcodebuild from the project root. Force Universal Binary (arm64 + x86_64)
+(cd "$PROJECT_DIR" && xcodebuild -scheme Resolver -configuration Release -derivedDataPath "$DERIVED_DATA_DIR" ARCHS="arm64 x86_64" clean build)
 
 if [ $? -ne 0 ]; then
     echo "❌ Build failed."
@@ -59,8 +59,16 @@ DMG_PATH="$BUILD_OUTPUT_DIR/Resolver.dmg"
 # Remove old DMG
 rm -f "$DMG_PATH"
 
-# Create new DMG
-hdiutil create -volname "Resolver" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_PATH"
+# Create new DMG using a staging directory to ensure the App itself is inside the DMG, not just its contents
+DMG_STAGING="$BUILD_OUTPUT_DIR/dmg_staging"
+rm -rf "$DMG_STAGING"
+mkdir -p "$DMG_STAGING"
+cp -R "$APP_PATH" "$DMG_STAGING/"
+
+hdiutil create -volname "Resolver" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG_PATH"
+
+# Cleanup staging
+rm -rf "$DMG_STAGING"
 
 if [ $? -ne 0 ]; then
     echo "❌ DMG creation failed."
