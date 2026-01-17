@@ -1,15 +1,15 @@
 #!/bin/bash
 
+# Ensure we are in the directory of the script
+cd "$(dirname "$0")"
+SCRIPT_DIR="$(pwd)"
+
 # Configuration
-# Path to the .xcodeproj directory relative to this script
-# Assuming this script is in Resolver/deploy.sh and project is ../Resolver.xcodeproj
-PROJECT_DIR=".."
+# Resolving Absolute Path to Repo Root (Parent of script dir)
+PROJECT_DIR="$(cd .. && pwd)"
 PROJECT_FILE="$PROJECT_DIR/Resolver.xcodeproj/project.pbxproj"
 BUILD_OUTPUT_DIR="$PROJECT_DIR/Build"
 DERIVED_DATA_DIR="$BUILD_OUTPUT_DIR/build_xcode"
-
-# Ensure we are in the directory of the script
-cd "$(dirname "$0")"
 
 # Check if project file exists
 if [ ! -f "$PROJECT_FILE" ]; then
