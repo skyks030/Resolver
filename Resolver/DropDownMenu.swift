@@ -53,9 +53,10 @@ struct DropDownMenu: View {
                 .padding()
                 .transition(.opacity)
                 
+                
             } else {
                 // Main Menu View
-                HoverButton(title: "VFX-LIST") {
+                HoverButton(title: "VFX") {
                     withAnimation { showVfxInput = true }
                 }
                 
@@ -89,7 +90,7 @@ struct DropDownMenu: View {
                 .padding(.top, 4)
             }
         }
-        .frame(minWidth: 150, maxWidth: 200)
+        .frame(minWidth: 100, maxWidth: 150)
         .padding()
     }
 }
