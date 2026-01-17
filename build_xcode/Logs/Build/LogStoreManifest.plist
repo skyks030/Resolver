@@ -6,7 +6,7 @@
 	<integer>11</integer>
 	<key>logs</key>
 	<dict>
-		<key>53E36F5B-2802-466D-AD14-57182A555A77</key>
+		<key>0ABA3F57-696F-4785-B8FD-E0FC330A360D</key>
 		<dict>
 			<key>className</key>
 			<string>IDECommandLineBuildLog</string>
@@ -15,7 +15,7 @@
 			<key>domainType</key>
 			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
 			<key>fileName</key>
-			<string>53E36F5B-2802-466D-AD14-57182A555A77.xcactivitylog</string>
+			<string>0ABA3F57-696F-4785-B8FD-E0FC330A360D.xcactivitylog</string>
 			<key>hasPrimaryLog</key>
 			<true/>
 			<key>primaryObservable</key>
@@ -40,55 +40,13 @@
 			<key>signature</key>
 			<string>Cleaning project Resolver with scheme Resolver and configuration Release</string>
 			<key>timeStartedRecording</key>
-			<real>790370868.25225306</real>
+			<real>790370723.82503295</real>
 			<key>timeStoppedRecording</key>
-			<real>790370868.55596697</real>
+			<real>790370724.07579005</real>
 			<key>title</key>
 			<string>Cleaning project Resolver with scheme Resolver and configuration Release</string>
 			<key>uniqueIdentifier</key>
-			<string>53E36F5B-2802-466D-AD14-57182A555A77</string>
-		</dict>
-		<key>A9C6C9C8-0E76-43B3-8306-03AEC9A560B3</key>
-		<dict>
-			<key>className</key>
-			<string>IDECommandLineBuildLog</string>
-			<key>documentTypeString</key>
-			<string>&lt;nil&gt;</string>
-			<key>domainType</key>
-			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
-			<key>fileName</key>
-			<string>A9C6C9C8-0E76-43B3-8306-03AEC9A560B3.xcactivitylog</string>
-			<key>hasPrimaryLog</key>
-			<true/>
-			<key>primaryObservable</key>
-			<dict>
-				<key>highLevelStatus</key>
-				<string>S</string>
-				<key>totalNumberOfAnalyzerIssues</key>
-				<integer>0</integer>
-				<key>totalNumberOfErrors</key>
-				<integer>0</integer>
-				<key>totalNumberOfTestFailures</key>
-				<integer>0</integer>
-				<key>totalNumberOfWarnings</key>
-				<integer>0</integer>
-			</dict>
-			<key>schemeIdentifier-containerName</key>
-			<string>Resolver project</string>
-			<key>schemeIdentifier-schemeName</key>
-			<string>Resolver</string>
-			<key>schemeIdentifier-sharedScheme</key>
-			<integer>1</integer>
-			<key>signature</key>
-			<string>Cleaning project Resolver with scheme Resolver and configuration Release</string>
-			<key>timeStartedRecording</key>
-			<real>790370811.71311498</real>
-			<key>timeStoppedRecording</key>
-			<real>790370811.96179104</real>
-			<key>title</key>
-			<string>Cleaning project Resolver with scheme Resolver and configuration Release</string>
-			<key>uniqueIdentifier</key>
-			<string>A9C6C9C8-0E76-43B3-8306-03AEC9A560B3</string>
+			<string>0ABA3F57-696F-4785-B8FD-E0FC330A360D</string>
 		</dict>
 	</dict>
 </dict>
