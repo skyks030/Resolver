@@ -6,7 +6,7 @@
 PROJECT_DIR=".."
 PROJECT_FILE="$PROJECT_DIR/Resolver.xcodeproj/project.pbxproj"
 BUILD_OUTPUT_DIR="$PROJECT_DIR/Build"
-DERIVED_DATA_DIR="$PROJECT_DIR/build_xcode"
+DERIVED_DATA_DIR="$BUILD_OUTPUT_DIR/build_xcode"
 
 # Ensure we are in the directory of the script
 cd "$(dirname "$0")"
