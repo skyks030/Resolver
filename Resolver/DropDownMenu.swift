@@ -61,23 +61,32 @@ struct DropDownMenu: View {
                 
                 Divider()
                 
-                Menu("Settings...") {
-                    Button("Check for Update") {
-                        UpdateChecker.runUpdateCheck(showOutput: true)
-                    }
-                    Button("Quit") {
-                        NSApplication.shared.terminate(nil)
-                    }
-                    Divider()
-                    // Version Info
+                HStack {
+                    // Version Info on the left
                     if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
-                        Text("Version \(version)")
-                            .font(.footnote)
+                        Text("v\(version)")
+                            .font(.caption)
                             .foregroundColor(.secondary)
-                            .opacity(0.5)
-                        
                     }
+                    
+                    Spacer()
+                    
+                    // Gear Menu on the right
+                    Menu {
+                        Button("Check for Update") {
+                            UpdateChecker.runUpdateCheck(showOutput: true)
+                        }
+                        Button("Quit") {
+                            NSApplication.shared.terminate(nil)
+                        }
+                    } label: {
+                        Image(systemName: "gearshape.fill")
+                            .font(.body)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
                 }
+                .padding(.top, 4)
             }
         }
         .frame(minWidth: 150, maxWidth: 200)
