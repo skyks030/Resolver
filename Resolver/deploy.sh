@@ -51,24 +51,74 @@ if [ ! -d "$APP_PATH" ]; then
     exit 1
 fi
 
-# 5. Create DMG
-echo "Creating DMG..."
-mkdir -p "$BUILD_OUTPUT_DIR"
-DMG_PATH="$BUILD_OUTPUT_DIR/Resolver.dmg"
+# 5. Create Styled DMG
+echo "Creating Styled DMG..."
 
-# Remove old DMG
-rm -f "$DMG_PATH"
-
-# Create new DMG using a staging directory to ensure the App itself is inside the DMG, not just its contents
+# Paths
 DMG_STAGING="$BUILD_OUTPUT_DIR/dmg_staging"
-rm -rf "$DMG_STAGING"
-mkdir -p "$DMG_STAGING"
+DMG_TMP="$BUILD_OUTPUT_DIR/Resolver_rw.dmg"
+DMG_FINAL="$BUILD_OUTPUT_DIR/Resolver.dmg"
+BACKGROUND_IMG="$PROJECT_DIR/Resolver/Assets.xcassets/AppIcon.appiconset/97531_512.png"
+
+# Clean up previous runs
+rm -rf "$DMG_STAGING" "$DMG_TMP" "$DMG_FINAL"
+
+# 5.1 Prepare Staging Area
+mkdir -p "$DMG_STAGING/.background"
 cp -R "$APP_PATH" "$DMG_STAGING/"
+ln -s /Applications "$DMG_STAGING/Applications"
 
-hdiutil create -volname "Resolver" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG_PATH"
+# Copy background image if it exists
+if [ -f "$BACKGROUND_IMG" ]; then
+    cp "$BACKGROUND_IMG" "$DMG_STAGING/.background/background.png"
+else
+    echo "Warning: Background image not found at $BACKGROUND_IMG"
+fi
 
-# Cleanup staging
-rm -rf "$DMG_STAGING"
+# 5.2 Create Temporary Read-Write DMG
+hdiutil create -volname "Resolver" -srcfolder "$DMG_STAGING" -ov -format UDRW "$DMG_TMP"
+
+# 5.3 Mount the DMG
+DEVICE=$(hdiutil attach -readwrite -noverify "$DMG_TMP" | egrep '^/dev/' | sed 1q | awk '{print $1}')
+sleep 2
+
+# 5.4 Apply Styling with AppleScript
+echo "Applying styling..."
+osascript <<EOF
+tell application "Finder"
+    tell disk "Resolver"
+        open
+        set current view of container window to icon view
+        set toolbar visible of container window to false
+        set statusbar visible of container window to false
+        set the bounds of container window to {400, 100, 1000, 500}
+        set theViewOptions to the icon view options of container window
+        set arrangement of theViewOptions to not arranged
+        set icon size of theViewOptions to 144
+        set background picture of theViewOptions to file ".background:background.png"
+        make new alias file at container window to file "Applications" with properties {name:"Applications"}
+        set position of item "Resolver" of container window to {160, 200}
+        set position of item "Applications" of container window to {440, 200}
+        close
+        open
+        update without registering applications
+        delay 2
+    end tell
+end tell
+EOF
+
+# 5.5 Unmount and Convert to Read-Only
+echo "Finalizing DMG..."
+chmod -Rf go-w /Volumes/Resolver
+sync
+hdiutil detach "$DEVICE"
+sleep 2
+
+echo "Converting to compressed DMG..."
+hdiutil convert "$DMG_TMP" -format UDZO -o "$DMG_FINAL"
+
+# Cleanup
+rm -rf "$DMG_STAGING" "$DMG_TMP"
 
 if [ $? -ne 0 ]; then
     echo "❌ DMG creation failed."
