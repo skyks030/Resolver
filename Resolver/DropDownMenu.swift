@@ -81,6 +81,7 @@ struct DropDownMenu: View {
             }
         }
         .frame(minWidth: 150, maxWidth: 200)
+        .padding()
     }
 }
 

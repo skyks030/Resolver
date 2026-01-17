@@ -9,6 +9,6 @@ struct ResolverApp: App {
         MenuBarExtra("Resolver", systemImage: "die.face.6.fill") { //cup.and.heat.waves.fill //cup.and.heat.waves
             DropDownMenu()
         }
-        .menuBarExtraStyle(.menu)
+        .menuBarExtraStyle(.window)
     }
 }
