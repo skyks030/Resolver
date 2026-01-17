@@ -49,10 +49,13 @@ resolve.OpenPage("edit")
 # === Zur Color Page wechseln ===
 #resolve.OpenPage("deliver")
 
-# === Clips auf Videospur 1 analysieren ===
-clips_v1 = timeline.GetItemListInTrack("video", 1)
+# === Clips auf Videospur analysieren ===
+target_track_index = int(sys.argv[1]) if len(sys.argv) > 1 else 1
+print(f"🔍 Analysiere Clips auf Videospur: {target_track_index}")
+
+clips_v1 = timeline.GetItemListInTrack("video", target_track_index)
 if not clips_v1:
-    print("❌ Keine Clips auf Videospur 1 gefunden.")
+    print(f"❌ Keine Clips auf Videospur {target_track_index} gefunden.")
     sys.exit(1)
 
     
