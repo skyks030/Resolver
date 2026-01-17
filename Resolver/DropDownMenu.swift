@@ -41,7 +41,7 @@ struct DropDownMenu: View {
                         
                         Button("Run") {
                             if !vfxTrack.isEmpty {
-                                PyScriptRunner.run(scriptName: "clip-grouping", args: [vfxTrack], showOutput: showOutput, enableDownload: enableDownload)
+                                PyScriptRunner.run(scriptName: "clip-indexing", args: [vfxTrack], showOutput: showOutput, enableDownload: enableDownload)
                                 withAnimation { showVfxInput = false }
                                 vfxTrack = ""
                             }
