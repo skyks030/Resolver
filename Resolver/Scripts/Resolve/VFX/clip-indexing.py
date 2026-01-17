@@ -39,8 +39,8 @@ frame_rate = timeline.GetSetting("timelineFrameRate")
 target_track_index = int(sys.argv[1]) if len(sys.argv) > 1 else 1
 
 # === Clips auf Videospur analysieren ===
-clips_v1 = timeline.GetItemListInTrack("video", target_track_index)
-if not clips_v1:
+videospur = timeline.GetItemListInTrack("video", target_track_index)
+if not videospur:
     print(f"❌ Keine Clips auf Videospur {target_track_index} gefunden.")
     sys.exit(1)
 
@@ -49,7 +49,7 @@ markers = timeline.GetMarkers()
 white_markers = []
 
 for frame_id, marker_data in markers.items():
-    if marker_data['color'] == 'White':
+    if marker_data['color'] == 'Cream':
         # frame_id is relative to timeline start in API logic usually, but let's verify context.
         # Usually GetMarkers returns absolute record frame or relative to start.
         # We will assume it keys by Frame ID correct for comparison with Clip Start.
@@ -73,7 +73,7 @@ vfx_counter = 10
 # Da Clips sortiert sein könnten, aber Marker auch, machen wir es einfach:
 # Find last marker where marker.frame <= clip.start
 
-for clip in clips_v1:
+for clip in videospur:
     clip_start = clip.GetStart()
     clip_end = clip.GetEnd()
     
@@ -108,6 +108,13 @@ for clip in clips_v1:
         
         # Counter erhöhen
         vfx_counter += 10
+        
+        # Marker setzen
+        relative_start = clip_start - timeline_start_frame
+        relative_end = clip_end - timeline_start_frame
+        
+        timeline.AddMarker(relative_start, "Green", "VFX In", vfx_final_name, 1)
+        timeline.AddMarker(relative_end - 1, "Red", "VFX Out", vfx_final_name, 1)
         
         # Output generieren
         
