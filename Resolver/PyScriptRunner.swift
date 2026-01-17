@@ -2,10 +2,10 @@ import Foundation
 import AppKit
 
 class PyScriptRunner {
-    static func run(scriptName: String, showOutput: Bool = false, enableDownload: Bool = false) {
+    static func run(scriptName: String, args: [String] = [], showOutput: Bool = false, enableDownload: Bool = false) {
 
         // Dev Mode: Check if local file exists
-        let devScriptPath = "/Users/skymuller/Git/Resolver/Resolver-mac/Resolver/Scripts/\(scriptName).py"
+        let devScriptPath = "/Users/skymuller/Git/Resolver/Resolver/Scripts/\(scriptName).py"
         let scriptURL: URL
         
         if FileManager.default.fileExists(atPath: devScriptPath) {
@@ -20,7 +20,9 @@ class PyScriptRunner {
 
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        task.arguments = [scriptURL.path]
+        var arguments = [scriptURL.path]
+        arguments.append(contentsOf: args)
+        task.arguments = arguments
 
         if showOutput {
             let pipe = Pipe()

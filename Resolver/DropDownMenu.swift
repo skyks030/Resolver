@@ -5,69 +5,82 @@ struct DropDownMenu: View {
     @State private var showOutput = true
     @State private var enableDownload = true
     
+    // VFX Input State
+    @State private var showVfxInput = false
+    @State private var vfxTrack = ""
+    
     var body: some View {
-        VStack(spacing: 10){
-            
-            Menu("Resolve") {
-                HoverButton(title: "VFX-LIST") {
-                    PyScriptRunner.run(scriptName: "clip-grouping", showOutput: showOutput, enableDownload: enableDownload)
-                    }
+        VStack(spacing: 10) {
+            if showVfxInput {
+                // Input View
+                VStack(spacing: 8) {
+                    Text("VFX Video Spur")
+                        .font(.headline)
                     
-                Menu("Render Notification") {
-                    HoverButton(title: "Sky") {
-                        PyScriptRunner.run(scriptName: "render-done-sky", showOutput: showOutput)
+                    TextField("#", text: $vfxTrack)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .frame(width: 50)
+                        .multilineTextAlignment(.center)
+                        // Filter for numbers only
+                        .onChange(of: vfxTrack) { newValue in
+                            let filtered = newValue.filter { "0123456789".contains($0) }
+                            if filtered != newValue {
+                                vfxTrack = filtered
+                            }
+                            // Limit to 1 digit
+                            if vfxTrack.count > 1 {
+                                vfxTrack = String(vfxTrack.prefix(1))
+                            }
+                        }
+                    
+                    HStack {
+                        Button("Cancel") {
+                            withAnimation { showVfxInput = false }
+                            vfxTrack = ""
+                        }
+                        
+                        Button("Run") {
+                            if !vfxTrack.isEmpty {
+                                PyScriptRunner.run(scriptName: "clip-grouping", args: [vfxTrack], showOutput: showOutput, enableDownload: enableDownload)
+                                withAnimation { showVfxInput = false }
+                                vfxTrack = ""
+                            }
+                        }
+                        .disabled(vfxTrack.isEmpty)
+                        .keyboardShortcut(.defaultAction)
                     }
-                    HoverButton(title: "Simon") {
-                        PyScriptRunner.run(scriptName: "render-done-simon", showOutput: showOutput)
-                    }
                 }
-                HoverButton(title: "Transcribe") {
-                    PyScriptRunner.run(scriptName: "transcribe", showOutput: showOutput)
-                }
-            }
-            
-            
-            Menu("DCP") {
-                Link("sub-converter", destination: URL(string: "https://www.michaelcinquin.com/tools/DCP/DCP_subtitling")!)
-                }
-                //.padding(35)
-            
-            
-            Divider()
-            
-            if let UserName = UserManager.shared.activeUserName {
-                Text("Active User: \(UserName)")
-            }
-            
-            Menu("Settings...") {
+                .padding()
+                .transition(.opacity)
                 
-                Menu("User"){
-                    HoverButton(title: "Simon"){
-                        UserManager.shared.setActiveUser(named: "Simon")
-                    }
-                    HoverButton(title: "Sky"){
-                        UserManager.shared.setActiveUser(named: "Sky")
-                    }
+            } else {
+                // Main Menu View
+                HoverButton(title: "VFX-LIST") {
+                    withAnimation { showVfxInput = true }
                 }
                 
-                Toggle("Show Output", isOn: $showOutput)
                 Divider()
-                Button("Check for Update") {
-                    UpdateChecker.runUpdateCheck(showOutput: true)
-                }
-                Button("Quit") {
-                    NSApplication.shared.terminate(nil)
-                }
-                Divider()
+                
+                Menu("Settings...") {
+                    Button("Check for Update") {
+                        UpdateChecker.runUpdateCheck(showOutput: true)
+                    }
+                    Button("Quit") {
+                        NSApplication.shared.terminate(nil)
+                    }
+                    Divider()
                     // Version Info
-                if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
-                    Text("Version \(version)")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-                        .opacity(0.5)
-                       
+                    if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
+                        Text("Version \(version)")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                            .opacity(0.5)
+                        
+                    }
                 }
             }
-        }.frame(maxWidth: 100)
+        }
+        .frame(minWidth: 150, maxWidth: 200)
     }
 }
+
