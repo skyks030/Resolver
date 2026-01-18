@@ -11,16 +11,17 @@ struct DropDownMenu: View {
     @State private var showMarkerMgmt = false
     
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 5) {
             if showVfxInput {
                 // Input View
-                VStack(spacing: 8) {
+                VStack(spacing: 6) {
                     Text("VFX Video Spur")
                         .font(.headline)
+                        .scaleEffect(0.9)
                     
                     TextField("#", text: $vfxTrack)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
-                        .frame(width: 50)
+                        .frame(width: 40)
                         .multilineTextAlignment(.center)
                         // Filter for numbers only
                         .onChange(of: vfxTrack) { newValue in
@@ -34,11 +35,12 @@ struct DropDownMenu: View {
                             }
                         }
                     
-                    HStack {
+                    HStack(spacing: 15) {
                         Button("Cancel") {
                             withAnimation { showVfxInput = false }
                             vfxTrack = ""
                         }
+                        .controlSize(.small)
                         
                         Button("Run") {
                             if !vfxTrack.isEmpty {
@@ -47,37 +49,43 @@ struct DropDownMenu: View {
                                 vfxTrack = ""
                             }
                         }
+                        .controlSize(.small)
                         .disabled(vfxTrack.isEmpty)
                         .keyboardShortcut(.defaultAction)
                     }
                 }
-                .padding()
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
                 .transition(.opacity)
                 
                 
             } else if showMarkerMgmt {
                 // Marker Management View
-                VStack(spacing: 8) {
-                    Text("Marker Management")
+                VStack(spacing: 6) {
+                    Text("Marker Mgmt")
                         .font(.headline)
+                        .scaleEffect(0.9)
                     
-                    Text("Delete all Resolver created markers?")
-                        .font(.caption)
+                    Text("Del. Resolver Markers?")
+                        .font(.caption2)
                         .multilineTextAlignment(.center)
                         .foregroundColor(.secondary)
                     
-                    Button("Delete All VFX Markers") {
+                    Button("Delete All") {
                         PyScriptRunner.run(scriptName: "clean-markers", showOutput: showOutput, enableDownload: false)
                         withAnimation { showMarkerMgmt = false }
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.red)
+                    .controlSize(.small)
                     
                     Button("Cancel") {
                         withAnimation { showMarkerMgmt = false }
                     }
+                    .controlSize(.small)
                 }
-                .padding()
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
                 .transition(.opacity)
 
             } else {
@@ -91,38 +99,45 @@ struct DropDownMenu: View {
                 }
                 
                 Divider()
+                    .padding(.vertical, 2)
                 
-                HStack {
-
-                    // Version Info on the left
-                    if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
-                        Text("v\(version)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    Spacer()
-                    
-                    // Gear Menu on the right
-                    Menu {
-                        Button("Check for Update") {
+                // Footer View
+                VStack(spacing: 2) {
+                    HStack(spacing: 12) {
+                        Button("Update") {
                             UpdateChecker.runUpdateCheck(showOutput: true)
                         }
+                        .buttonStyle(.plain)
+                        .font(.caption2)
+                        .foregroundColor(.primary)
+                        .onHover { inside in
+                            if inside { NSCursor.pointingHand.push() }
+                            else { NSCursor.pop() }
+                        }
+                        
                         Button("Quit") {
                             NSApplication.shared.terminate(nil)
                         }
-                    } label: {
-                        Image(systemName: "gearshape.fill")
-                            .font(.body)
+                        .buttonStyle(.plain)
+                        .font(.caption2)
+                        .foregroundColor(.primary)
+                        .onHover { inside in
+                            if inside { NSCursor.pointingHand.push() }
+                            else { NSCursor.pop() }
+                        }
                     }
-                    .menuStyle(.borderlessButton)
-                    .fixedSize()
+                    
+                    if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
+                        Text("v\(version)")
+                            .font(.system(size: 8))
+                            .foregroundColor(.gray)
+                    }
                 }
-                .padding(.top, 4)
+                .padding(.top, 2)
             }
         }
-        .frame(minWidth: 100, maxWidth: 150)
-        .padding()
+        .frame(minWidth: 100, maxWidth: 140)
+        .padding(10)
     }
 }
 
