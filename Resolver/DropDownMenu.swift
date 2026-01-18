@@ -11,7 +11,7 @@ struct DropDownMenu: View {
     @State private var showMarkerMgmt = false
     
     var body: some View {
-        VStack(spacing: 5) {
+        VStack(alignment: .leading, spacing: 6) {
             if showVfxInput {
                 // Input View
                 VStack(spacing: 6) {
@@ -58,7 +58,6 @@ struct DropDownMenu: View {
                 .padding(.vertical, 4)
                 .transition(.opacity)
                 
-                
             } else if showMarkerMgmt {
                 // Marker Management View
                 VStack(spacing: 6) {
@@ -90,64 +89,77 @@ struct DropDownMenu: View {
 
             } else {
                 // Main Menu View
-                HoverButton(title: "VFX") {
+                MenuRow(title: "VFX") {
                     withAnimation { showVfxInput = true }
                 }
-                
-                HoverButton(title: "Marker Management") {
+
+                MenuRow(title: "Marker Management") {
                     withAnimation { showMarkerMgmt = true }
                 }
                 
                 Divider()
                     .padding(.vertical, 2)
                 
-                // Footer View
-                VStack(alignment: .leading, spacing: 6) {
-                    Button("Help") {
-                        if let url = URL(string: "https://github.com/skyks030/Resolver") {
-                            NSWorkspace.shared.open(url)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .onHover { inside in
-                        if inside { NSCursor.pointingHand.push() }
-                        else { NSCursor.pop() }
-                    }
-
-                    Button("Check Update") {
-                        UpdateChecker.runUpdateCheck(showOutput: true)
-                    }
-                    .buttonStyle(.plain)
-                    .onHover { inside in
-                        if inside { NSCursor.pointingHand.push() }
-                        else { NSCursor.pop() }
-                    }
-                    
-                    Divider()
-                        .padding(.vertical, 2)
-                    
-                    Button("Quit") {
-                        NSApplication.shared.terminate(nil)
-                    }
-                    .buttonStyle(.plain)
-                    .onHover { inside in
-                        if inside { NSCursor.pointingHand.push() }
-                        else { NSCursor.pop() }
-                    }
-                    
-                    if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
-                        Text("v\(version)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .padding(.top, 2)
+                MenuRow(title: "Help") {
+                    if let url = URL(string: "https://github.com/skyks030/Resolver") {
+                        NSWorkspace.shared.open(url)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 2)
+
+                MenuRow(title: "Check Update") {
+                    UpdateChecker.runUpdateCheck(showOutput: true)
+                }
+                
+                Divider()
+                    .padding(.vertical, 2)
+                
+                Button(action: {
+                    NSApplication.shared.terminate(nil)
+                }) {
+                    HStack {
+                        Text("Quit")
+                        Spacer()
+                        Text("⌘Q")
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut("q", modifiers: .command)
+                .onHover { inside in
+                    if inside { NSCursor.pointingHand.push() }
+                    else { NSCursor.pop() }
+                }
+                
+                if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
+                    Text("v\(version)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.top, 2)
+                }
             }
         }
-        .frame(minWidth: 100, maxWidth: 140)
+        .frame(minWidth: 140, maxWidth: 160) // Slightly wider for shortcuts/text
         .padding(10)
+    }
+}
+
+struct MenuRow: View {
+    let title: String
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { inside in
+            if inside { NSCursor.pointingHand.push() }
+            else { NSCursor.pop() }
+        }
     }
 }
 
