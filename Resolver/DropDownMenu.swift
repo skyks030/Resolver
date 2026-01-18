@@ -102,14 +102,13 @@ struct DropDownMenu: View {
                     .padding(.vertical, 2)
                 
                 // Footer View
-                VStack(spacing: 4) {
+                VStack(alignment: .leading, spacing: 6) {
                     Button("Help") {
                         if let url = URL(string: "https://github.com/skyks030/Resolver") {
                             NSWorkspace.shared.open(url)
                         }
                     }
                     .buttonStyle(.plain)
-                    .font(.caption2)
                     .onHover { inside in
                         if inside { NSCursor.pointingHand.push() }
                         else { NSCursor.pop() }
@@ -119,17 +118,18 @@ struct DropDownMenu: View {
                         UpdateChecker.runUpdateCheck(showOutput: true)
                     }
                     .buttonStyle(.plain)
-                    .font(.caption2)
                     .onHover { inside in
                         if inside { NSCursor.pointingHand.push() }
                         else { NSCursor.pop() }
                     }
                     
+                    Divider()
+                        .padding(.vertical, 2)
+                    
                     Button("Quit") {
                         NSApplication.shared.terminate(nil)
                     }
                     .buttonStyle(.plain)
-                    .font(.caption2)
                     .onHover { inside in
                         if inside { NSCursor.pointingHand.push() }
                         else { NSCursor.pop() }
@@ -137,11 +137,12 @@ struct DropDownMenu: View {
                     
                     if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
                         Text("v\(version)")
-                            .font(.system(size: 8))
-                            .foregroundColor(.gray)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                             .padding(.top, 2)
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 2)
             }
         }
