@@ -102,35 +102,44 @@ struct DropDownMenu: View {
                     .padding(.vertical, 2)
                 
                 // Footer View
-                VStack(spacing: 2) {
-                    HStack(spacing: 12) {
-                        Button("Update") {
-                            UpdateChecker.runUpdateCheck(showOutput: true)
+                VStack(spacing: 4) {
+                    Button("Help") {
+                        if let url = URL(string: "https://github.com/skyks030/Resolver") {
+                            NSWorkspace.shared.open(url)
                         }
-                        .buttonStyle(.plain)
-                        .font(.caption2)
-                        .foregroundColor(.primary)
-                        .onHover { inside in
-                            if inside { NSCursor.pointingHand.push() }
-                            else { NSCursor.pop() }
-                        }
-                        
-                        Button("Quit") {
-                            NSApplication.shared.terminate(nil)
-                        }
-                        .buttonStyle(.plain)
-                        .font(.caption2)
-                        .foregroundColor(.primary)
-                        .onHover { inside in
-                            if inside { NSCursor.pointingHand.push() }
-                            else { NSCursor.pop() }
-                        }
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption2)
+                    .onHover { inside in
+                        if inside { NSCursor.pointingHand.push() }
+                        else { NSCursor.pop() }
+                    }
+
+                    Button("Check Update") {
+                        UpdateChecker.runUpdateCheck(showOutput: true)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption2)
+                    .onHover { inside in
+                        if inside { NSCursor.pointingHand.push() }
+                        else { NSCursor.pop() }
+                    }
+                    
+                    Button("Quit") {
+                        NSApplication.shared.terminate(nil)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption2)
+                    .onHover { inside in
+                        if inside { NSCursor.pointingHand.push() }
+                        else { NSCursor.pop() }
                     }
                     
                     if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
                         Text("v\(version)")
                             .font(.system(size: 8))
                             .foregroundColor(.gray)
+                            .padding(.top, 2)
                     }
                 }
                 .padding(.top, 2)
