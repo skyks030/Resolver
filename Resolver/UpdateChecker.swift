@@ -38,7 +38,10 @@ final class UpdateChecker {
         showOutput: Bool,
         completion: @escaping (_ updateAvailable: Bool, _ currentVersion: String, _ latestVersion: String) -> Void
     ) {
-        guard let url = URL(string: versionURLString) else {
+        // Add timestamp to bust GitHub cache
+        let urlStringWithCacheBust = "\(versionURLString)?t=\(Int(Date().timeIntervalSince1970))"
+        
+        guard let url = URL(string: urlStringWithCacheBust) else {
             if showOutput {
                 showAlert(message: "❌ Ungültige URL für Versionsprüfung.")
             }
