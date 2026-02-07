@@ -11,13 +11,45 @@ class PyScriptRunner {
         if FileManager.default.fileExists(atPath: devScriptPath) {
             print("🔧 Dev-Mode: Nutze lokales Skript \(devScriptPath)")
             scriptURL = URL(fileURLWithPath: devScriptPath)
-        } else if let bundleURL = Bundle.main.url(forResource: scriptName, withExtension: "py") {
-            scriptURL = bundleURL
         } else {
-            let msg = "Script not found: \(scriptName)"
-            print("❌ \(msg)")
-            completion?("{\"error\": \"\(msg)\"}")
-            return
+            // Bundle Lookup Strategy
+            var foundURL: URL?
+            let fileName = URL(fileURLWithPath: scriptName).lastPathComponent
+            let dirName = URL(fileURLWithPath: scriptName).deletingLastPathComponent().path
+            let effectiveDir = dirName == "." ? "" : dirName
+
+            // 1. Try "Scripts/<path>/<name>.py" (Folder Reference style)
+            if let resources = Bundle.main.resourceURL {
+                let fullPath = resources.appendingPathComponent("Scripts").appendingPathComponent(scriptName + ".py")
+                if FileManager.default.fileExists(atPath: fullPath.path) {
+                    foundURL = fullPath
+                }
+            }
+            
+            // 2. Try standard directory search in "Scripts"
+            if foundURL == nil {
+                let subdir = effectiveDir.isEmpty ? "Scripts" : "Scripts/\(effectiveDir)"
+                foundURL = Bundle.main.url(forResource: fileName, withExtension: "py", subdirectory: subdir)
+            }
+
+            // 3. Try standard directory search (root)
+            if foundURL == nil && !effectiveDir.isEmpty {
+                foundURL = Bundle.main.url(forResource: fileName, withExtension: "py", subdirectory: effectiveDir)
+            }
+            
+            // 4. Try flattened / fallback
+            if foundURL == nil {
+                 foundURL = Bundle.main.url(forResource: fileName, withExtension: "py")
+            }
+
+            if let url = foundURL {
+                scriptURL = url
+            } else {
+                let msg = "Script not found in Bundle: \(scriptName)"
+                print("❌ \(msg)")
+                completion?("{\"error\": \"\(msg)\"}")
+                return
+            }
         }
 
         let task = Process()
