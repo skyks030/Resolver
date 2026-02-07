@@ -15,10 +15,9 @@ struct ResolverApp: App {
         }
         .menuBarExtraStyle(.window)
         
-        WindowGroup("Project Export", id: "export") {
+        Window("Project Export", id: "export") {
             ProjectExportView()
                 .environmentObject(projectManager)
         }
-        .handlesExternalEvents(matching: Set(arrayLiteral: "export"))
     }
 }

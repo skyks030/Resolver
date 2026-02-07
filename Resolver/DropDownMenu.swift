@@ -19,6 +19,7 @@ struct DropDownMenu: View {
     // Project State
     @State private var showNewProjectInput = false
     @State private var newProjectName = ""
+    @State private var menuWindow: NSWindow?
     
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -202,17 +203,26 @@ struct DropDownMenu: View {
                 if projectManager.currentProject != nil {
                     MenuRow(title: "Export Data") {
                         openWindow(id: "export")
+                        NSApplication.shared.activate(ignoringOtherApps: true)
+                        // Close the menu window safely
+                        menuWindow?.orderOut(nil)
                     }
                     Divider().padding(.vertical, 4)
                 }
 
                 MenuRow(title: "Index VFX-Clips") {
                     vfxAction = .index
+                    if let track = projectManager.currentProject?.vfxTrackIndex {
+                        vfxTrack = track
+                    }
                     withAnimation { showVfxInput = true }
                 }
                 
                 MenuRow(title: "Create Clip-Groups") {
                     vfxAction = .group
+                    if let track = projectManager.currentProject?.vfxTrackIndex {
+                        vfxTrack = track
+                    }
                     withAnimation { showVfxInput = true }
                 }
 
@@ -222,6 +232,14 @@ struct DropDownMenu: View {
                 
                 MenuRow(title: "Group Management") {
                     withAnimation { showGroupMgmt = true }
+                }
+                
+                MenuRow(title: "Add Scene Marker") {
+                    PyScriptRunner.run(scriptName: "add-scene-marker", showOutput: false, enableDownload: false) { _ in
+                        DispatchQueue.main.async {
+                            NSApplication.shared.hide(nil)
+                        }
+                    }
                 }
                 
                 Divider()
@@ -256,12 +274,20 @@ struct DropDownMenu: View {
         }
         .frame(minWidth: 160, maxWidth: 180) // Slightly wider for padding
         .padding(6) // Reduced outer padding
+        .background(WindowAccessor(window: $menuWindow))
     }
     
     private func runVfxScript() {
         guard !vfxTrack.isEmpty else { return }
         
+        menuWindow?.orderOut(nil)
+        
         let trackArg = vfxTrack
+        
+        // Save track choice if project exists
+        if let project = projectManager.currentProject {
+            projectManager.updateVfxTrack(projectId: project.id, track: trackArg)
+        }
         
         if vfxAction == .group {
             // Grouping: Just run script, show output if any (it logs CSV-like but we just display it if needed)
@@ -280,13 +306,39 @@ struct DropDownMenu: View {
                 withAnimation { showVfxInput = false }
                 vfxTrack = ""
                 
-                guard let output = output, let data = output.data(using: .utf8) else { return }
+                guard let output = output else { return }
+                
+                // Robust JSON Extraction: Find outer brackets to ignore potential warnings/logs
+                var jsonString = output
+                if let start = output.firstIndex(of: "["), let end = output.lastIndex(of: "]") {
+                     if start <= end {
+                         jsonString = String(output[start...end])
+                     }
+                }
+                
+                guard let data = jsonString.data(using: .utf8) else { return }
                 
                 // Try to decode JSON
-                if let clips = try? JSONDecoder().decode([ClipData].self, from: data) {
+                do {
+                    // Use intermediate struct to handle missing ID from Python
+                    let rawClips = try JSONDecoder().decode([IncomingClipData].self, from: data)
+                    
+                    // Map to ClipData (generates UUID automatically)
+                    let clips = rawClips.map { raw in
+                        ClipData(
+                            vfxName: raw.vfxName,
+                            tcIn: raw.tcIn,
+                            tcOut: raw.tcOut,
+                            sourceTcIn: raw.sourceTcIn,
+                            sourceTcOut: raw.sourceTcOut,
+                            fileNames: raw.fileNames,
+                            reelName: raw.reelName
+                        )
+                    }
+                    
                     if let project = projectManager.currentProject {
-                        projectManager.addClips(to: project.id, clips: clips)
-                        print("Saved \(clips.count) clips to project")
+                        projectManager.addIndexingRun(to: project.id, clips: clips)
+                        print("Saved run with \(clips.count) clips to project")
                     } else {
                         // Legacy handling
                         let header = "VFX-Name,Rec-TC-In,Rec-TC-Out,File-Names\n"
@@ -294,10 +346,10 @@ struct DropDownMenu: View {
                         let csv = header + rows
                         showAlert(csv)
                     }
-                } else {
-                    if shouldShowOutput {
-                        showAlert(output)
-                    }
+                } catch {
+                    print("JSON Decode Error: \(error)")
+                    // ALWAYS show error if something went wrong, as requested by user
+                    showAlert("Fehler beim Lesen der Daten:\n\(error.localizedDescription)\n\nRaw Output:\n\(output)")
                 }
             }
         }
@@ -356,3 +408,26 @@ struct MenuRow: View {
     }
 }
 
+struct IncomingClipData: Decodable {
+    let vfxName: String
+    let tcIn: String
+    let tcOut: String
+    let sourceTcIn: String
+    let sourceTcOut: String
+    let fileNames: String
+    let reelName: String
+}
+
+struct WindowAccessor: NSViewRepresentable {
+    @Binding var window: NSWindow?
+    
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            self.window = view.window
+        }
+        return view
+    }
+    
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}

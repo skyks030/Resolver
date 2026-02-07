@@ -5,18 +5,27 @@ import Combine
 
 struct ClipData: Codable, Identifiable {
     var id: UUID = UUID()
-    let vfxName: String
-    let tcIn: String
-    let tcOut: String
-    let fileNames: String
-    // Future metadata fields can be added here
+    var vfxName: String
+    var tcIn: String
+    var tcOut: String
+    var sourceTcIn: String
+    var sourceTcOut: String
+    var fileNames: String
+    var reelName: String
+}
+
+struct IndexingRun: Codable, Identifiable {
+    var id: UUID = UUID()
+    var date: Date = Date()
+    var clips: [ClipData]
 }
 
 struct Project: Codable, Identifiable {
     var id: UUID = UUID()
     var name: String
     var createdDate: Date = Date()
-    var clips: [ClipData] = []
+    var runs: [IndexingRun] = []
+    var vfxTrackIndex: String? = nil
 }
 
 struct ProjectStore: Codable {
@@ -29,6 +38,14 @@ struct ProjectStore: Codable {
 class ProjectManager: ObservableObject {
     @Published var projects: [Project] = []
     @Published var currentProject: Project?
+    
+    // Helper to get formatted date
+    static let dateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .short
+        return f
+    }()
     
     private let saveUrl: URL
     
@@ -71,17 +88,38 @@ class ProjectManager: ObservableObject {
         save()
     }
     
-    func addClips(to projectId: UUID, clips: [ClipData]) {
+    func addIndexingRun(to projectId: UUID, clips: [ClipData]) {
         guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
         
-        // Append new clips
-        projects[index].clips.append(contentsOf: clips)
+        let run = IndexingRun(clips: clips)
+        projects[index].runs.append(run)
         
-        // Update current project if it's the one modified
+        // Update current project if active
         if currentProject?.id == projectId {
             currentProject = projects[index]
         }
         
+        save()
+    }
+    
+    func deleteIndexingRun(projectId: UUID, runId: UUID) {
+        guard let pIndex = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        
+        projects[pIndex].runs.removeAll { $0.id == runId }
+        
+        if currentProject?.id == projectId {
+            currentProject = projects[pIndex]
+        }
+        save()
+    }
+
+    func updateVfxTrack(projectId: UUID, track: String) {
+        guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[index].vfxTrackIndex = track
+        
+        if currentProject?.id == projectId {
+            currentProject = projects[index]
+        }
         save()
     }
     
