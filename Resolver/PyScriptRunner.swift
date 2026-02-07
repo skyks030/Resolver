@@ -14,8 +14,9 @@ class PyScriptRunner {
         } else if let bundleURL = Bundle.main.url(forResource: scriptName, withExtension: "py") {
             scriptURL = bundleURL
         } else {
-            print("❌ Skript nicht gefunden: \(scriptName)")
-            completion?(nil)
+            let msg = "Script not found: \(scriptName)"
+            print("❌ \(msg)")
+            completion?("{\"error\": \"\(msg)\"}")
             return
         }
 
@@ -35,17 +36,17 @@ class PyScriptRunner {
                 try task.run()
                 task.waitUntilExit()
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                if let output = String(data: data, encoding: .utf8) {
+                if let output = String(data: data, encoding: .utf8), !output.isEmpty {
                     if showOutput {
                         showOutputWindow(output, enableDownload: enableDownload)
                     }
                     completion?(output)
                 } else {
-                    completion?(nil)
+                    completion?("{\"error\": \"No output from Python script (Exit Code: \(task.terminationStatus))\"}")
                 }
             } catch {
                 print("❌ Fehler: \(error.localizedDescription)")
-                completion?(nil)
+                completion?("{\"error\": \"Execution failed: \(error.localizedDescription)\"}")
             }
         } else {
             do { try task.run() } catch {
