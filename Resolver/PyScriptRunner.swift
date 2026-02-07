@@ -2,7 +2,7 @@ import Foundation
 import AppKit
 
 class PyScriptRunner {
-    static func run(scriptName: String, args: [String] = [], showOutput: Bool = false, enableDownload: Bool = false) {
+    static func run(scriptName: String, args: [String] = [], showOutput: Bool = false, enableDownload: Bool = false, completion: ((String?) -> Void)? = nil) {
 
         // Dev Mode: Check if local file exists
         let devScriptPath = "/Users/skymuller/Git/Resolver/Resolver/Scripts/\(scriptName).py"
@@ -15,6 +15,7 @@ class PyScriptRunner {
             scriptURL = bundleURL
         } else {
             print("❌ Skript nicht gefunden: \(scriptName)")
+            completion?(nil)
             return
         }
 
@@ -23,8 +24,10 @@ class PyScriptRunner {
         var arguments = [scriptURL.path]
         arguments.append(contentsOf: args)
         task.arguments = arguments
+        
+        let needsOutput = showOutput || completion != nil
 
-        if showOutput {
+        if needsOutput {
             let pipe = Pipe()
             task.standardOutput = pipe
             task.standardError = pipe
@@ -33,10 +36,16 @@ class PyScriptRunner {
                 task.waitUntilExit()
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 if let output = String(data: data, encoding: .utf8) {
-                    showOutputWindow(output, enableDownload: enableDownload)
+                    if showOutput {
+                        showOutputWindow(output, enableDownload: enableDownload)
+                    }
+                    completion?(output)
+                } else {
+                    completion?(nil)
                 }
             } catch {
                 print("❌ Fehler: \(error.localizedDescription)")
+                completion?(nil)
             }
         } else {
             do { try task.run() } catch {
