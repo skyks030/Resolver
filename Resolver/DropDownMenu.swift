@@ -12,7 +12,7 @@ struct DropDownMenu: View {
     @State private var showGroupMgmt = false
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 2) {
             if showVfxInput {
                 // Input View
                 VStack(spacing: 6) {
@@ -132,7 +132,7 @@ struct DropDownMenu: View {
                 }
                 
                 Divider()
-                    .padding(.vertical, 2)
+                    .padding(.vertical, 4)
                 
                 MenuRow(title: "Help") {
                     if let url = URL(string: "https://github.com/skyks030/Resolver") {
@@ -140,61 +140,62 @@ struct DropDownMenu: View {
                     }
                 }
 
-
                 MenuRow(title: "Check Update") {
                     UpdateChecker.runUpdateCheck(showOutput: true)
                 }
                 
                 Divider()
-                    .padding(.vertical, 2)
+                    .padding(.vertical, 4)
                 
-                Button(action: {
+                MenuRow(title: "Quit", shortcut: "⌘Q") {
                     NSApplication.shared.terminate(nil)
-                }) {
-                    HStack {
-                        Text("Quit")
-                        Spacer()
-                        Text("⌘Q")
-                            .foregroundColor(.secondary)
-                            .font(.caption)
-                    }
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
                 .keyboardShortcut("q", modifiers: .command)
-                .onHover { inside in
-                    if inside { NSCursor.pointingHand.push() }
-                    else { NSCursor.pop() }
-                }
                 
                 if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
                     Text("v\(version)")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                        .padding(.leading, 8) // Align with text in MenuRow
                         .padding(.top, 2)
                 }
             }
         }
-        .frame(minWidth: 140, maxWidth: 160) // Slightly wider for shortcuts/text
-        .padding(10)
+        .frame(minWidth: 160, maxWidth: 180) // Slightly wider for padding
+        .padding(6) // Reduced outer padding
     }
 }
 
 struct MenuRow: View {
     let title: String
+    var shortcut: String? = nil
     let action: () -> Void
+    
+    @State private var isHovering = false
     
     var body: some View {
         Button(action: action) {
-            Text(title)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
+            HStack {
+                Text(title)
+                if let shortcut = shortcut {
+                    Spacer()
+                    Text(shortcut)
+                        .font(.caption)
+                        .foregroundColor(isHovering ? .white.opacity(0.8) : .secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
         }
         .buttonStyle(.plain)
-        .onHover { inside in
-            if inside { NSCursor.pointingHand.push() }
-            else { NSCursor.pop() }
-        }
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(isHovering ? Color.accentColor : Color.clear)
+        )
+        .foregroundColor(isHovering ? .white : .primary)
+        .onHover { isHovering = $0 }
     }
 }
 
