@@ -12,12 +12,29 @@ struct ClipData: Codable, Identifiable {
     var sourceTcOut: String
     var fileNames: String
     var reelName: String
+    var frameStart: Int?
+    var frameEnd: Int?
+}
+
+struct MarkerData: Codable, Identifiable {
+    var id = UUID()
+    let frameId: Int
+    let color: String
+    let name: String
+    let note: String
+    let duration: Int
+    
+    // Check CodingKeys to exclude ID from JSON requirement
+    private enum CodingKeys: String, CodingKey {
+        case frameId, color, name, note, duration
+    }
 }
 
 struct IndexingRun: Codable, Identifiable {
     var id: UUID = UUID()
     var date: Date = Date()
     var clips: [ClipData]
+    var sceneMarkers: [MarkerData]? = []
 }
 
 struct Project: Codable, Identifiable {
@@ -97,10 +114,12 @@ class ProjectManager: ObservableObject {
         save()
     }
     
-    func addIndexingRun(to projectId: UUID, clips: [ClipData]) {
+    func addIndexingRun(to projectId: UUID, clips: [ClipData], sceneMarkers: [MarkerData] = []) {
         guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
         
-        let run = IndexingRun(clips: clips)
+        var run = IndexingRun(clips: clips)
+        run.sceneMarkers = sceneMarkers
+        
         projects[index].runs.append(run)
         
         // Update current project if active

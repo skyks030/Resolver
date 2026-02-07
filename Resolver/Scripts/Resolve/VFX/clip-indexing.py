@@ -183,11 +183,29 @@ try:
                 "sourceTcIn": str(source_tc_in or ""),
                 "sourceTcOut": str(source_tc_out or ""),
                 "fileNames": str(clip.GetName() or ""),
-                "reelName": str(reel_name or "")
+                "reelName": str(reel_name or ""),
+                "frameStart": int(clip_start),
+                "frameEnd": int(clip_end)
             })
 
-    # Output NUR JSON
-    print(json.dumps(results, indent=2))
+    # Prepare Scene Markers for Export
+    scene_markers_output = []
+    for m in white_markers:
+        scene_markers_output.append({
+            "frameId": m['frame'],
+            "color": "Cream",
+            "name": m['name'],
+            "note": m.get('note', ''),
+            "duration": 1
+        })
+
+    # Output JSON Object
+    final_output = {
+        "clips": results,
+        "sceneMarkers": scene_markers_output
+    }
+
+    print(json.dumps(final_output, indent=2))
     sys.stdout.flush()
 
 except Exception as e:

@@ -324,16 +324,38 @@ struct DropDownMenu: View {
         guard let output = output else { return }
         
         var jsonString = output
-        if let start = output.firstIndex(of: "["), let end = output.lastIndex(of: "]") {
+        // Try to find JSON start
+        if let start = output.firstIndex(of: "{"), let end = output.lastIndex(of: "}") {
+             if start <= end { jsonString = String(output[start...end]) }
+        } else if let start = output.firstIndex(of: "["), let end = output.lastIndex(of: "]") {
              if start <= end { jsonString = String(output[start...end]) }
         }
         
         guard let data = jsonString.data(using: .utf8) else { return }
         
         do {
+            // Try decoding new format
+            if let runData = try? JSONDecoder().decode(IncomingRunData.self, from: data) {
+                 let clips = runData.clips.map { raw in
+                    ClipData(vfxName: raw.vfxName, tcIn: raw.tcIn, tcOut: raw.tcOut, sourceTcIn: raw.sourceTcIn, sourceTcOut: raw.sourceTcOut, fileNames: raw.fileNames, reelName: raw.reelName, frameStart: raw.frameStart, frameEnd: raw.frameEnd)
+                 }
+                 
+                 let markers = runData.sceneMarkers.map { raw in
+                     MarkerData(frameId: raw.frameId, color: raw.color, name: raw.name, note: raw.note, duration: raw.duration)
+                 }
+                 
+                 if let project = projectManager.currentProject {
+                     projectManager.addIndexingRun(to: project.id, clips: clips, sceneMarkers: markers)
+                 } else {
+                     showAlert("CSV Output:\n" + clips.map { $0.vfxName }.joined(separator: ","))
+                 }
+                 return
+            }
+            
+            // Fallback to old format
             let rawClips = try JSONDecoder().decode([IncomingClipData].self, from: data)
             let clips = rawClips.map { raw in
-                ClipData(vfxName: raw.vfxName, tcIn: raw.tcIn, tcOut: raw.tcOut, sourceTcIn: raw.sourceTcIn, sourceTcOut: raw.sourceTcOut, fileNames: raw.fileNames, reelName: raw.reelName)
+                ClipData(vfxName: raw.vfxName, tcIn: raw.tcIn, tcOut: raw.tcOut, sourceTcIn: raw.sourceTcIn, sourceTcOut: raw.sourceTcOut, fileNames: raw.fileNames, reelName: raw.reelName, frameStart: raw.frameStart, frameEnd: raw.frameEnd)
             }
             
             if let project = projectManager.currentProject {
@@ -401,8 +423,20 @@ struct MenuRow: View {
 }
 
 // Re-declare Structs used
+struct IncomingRunData: Decodable {
+    let clips: [IncomingClipData]
+    let sceneMarkers: [IncomingMarkerData]
+}
+
+struct IncomingMarkerData: Decodable {
+    let frameId: Int
+    let color, name, note: String
+    let duration: Int
+}
+
 struct IncomingClipData: Decodable {
     let vfxName, tcIn, tcOut, sourceTcIn, sourceTcOut, fileNames, reelName: String
+    let frameStart, frameEnd: Int?
 }
 
 struct WindowAccessor: NSViewRepresentable {
