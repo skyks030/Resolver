@@ -13,8 +13,7 @@ struct DropDownMenu: View {
     @State private var showVfxInput = false
     @State private var vfxTrack = ""
     
-    @State private var showMarkerMgmt = false
-    @State private var showGroupMgmt = false
+    @State private var showDeleteMenu = false
     
     // Project State
     @State private var showNewProjectInput = false
@@ -99,62 +98,51 @@ struct DropDownMenu: View {
                 .padding(.vertical, 4)
                 .transition(.opacity)
 
-            } else if showMarkerMgmt {
-                // Marker Management View
-                VStack(spacing: 6) {
-                    Text("Marker Mgmt")
+            } else if showDeleteMenu {
+                // Delete Menu View
+                VStack(spacing: 8) {
+                    Text("Delete Tools")
                         .font(.headline)
                         .scaleEffect(0.9)
+                        .padding(.bottom, 2)
                     
-                    Text("Del. Resolver Markers?")
-                        .font(.caption2)
-                        .multilineTextAlignment(.center)
-                        .foregroundColor(.secondary)
-                    
-                    Button("Delete All") {
+                    Button("Del. Resolver Markers") {
                         PyScriptRunner.run(scriptName: "clean-markers", showOutput: showOutput, enableDownload: false)
-                        withAnimation { showMarkerMgmt = false }
+                        withAnimation { showDeleteMenu = false }
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.bordered)
                     .tint(.red)
                     .controlSize(.small)
+                    .frame(maxWidth: .infinity)
                     
-                    Button("Cancel") {
-                        withAnimation { showMarkerMgmt = false }
-                    }
-                    .controlSize(.small)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .transition(.opacity)
-
-            } else if showGroupMgmt {
-                // Group Management View
-                VStack(spacing: 6) {
-                    Text("Group Mgmt")
-                        .font(.headline)
-                        .scaleEffect(0.9)
-                    
-                    Text("Del. Resolver Groups?")
-                        .font(.caption2)
-                        .multilineTextAlignment(.center)
-                        .foregroundColor(.secondary)
-                    
-                    Button("Delete All") {
+                    Button("Del. Resolver Groups") {
                         PyScriptRunner.run(scriptName: "clean-groups", showOutput: showOutput, enableDownload: false)
-                        withAnimation { showGroupMgmt = false }
+                        withAnimation { showDeleteMenu = false }
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.bordered)
                     .tint(.red)
                     .controlSize(.small)
+                    .frame(maxWidth: .infinity)
+
+                    Button("Del. Scene Markers") {
+                        PyScriptRunner.run(scriptName: "clean-scene-markers", showOutput: showOutput, enableDownload: false)
+                        withAnimation { showDeleteMenu = false }
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity)
+                    
+                    Divider()
                     
                     Button("Cancel") {
-                        withAnimation { showGroupMgmt = false }
+                        withAnimation { showDeleteMenu = false }
                     }
                     .controlSize(.small)
+                    .frame(maxWidth: .infinity)
                 }
                 .padding(.horizontal, 8)
-                .padding(.vertical, 4)
+                .padding(.vertical, 8)
                 .transition(.opacity)
 
             } else {
@@ -226,12 +214,8 @@ struct DropDownMenu: View {
                     withAnimation { showVfxInput = true }
                 }
 
-                MenuRow(title: "Marker Management") {
-                    withAnimation { showMarkerMgmt = true }
-                }
-                
-                MenuRow(title: "Group Management") {
-                    withAnimation { showGroupMgmt = true }
+                MenuRow(title: "Delete...") {
+                     withAnimation { showDeleteMenu = true }
                 }
                 
                 MenuRow(title: "Add Scene Marker") {

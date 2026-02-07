@@ -119,8 +119,11 @@ fi
 # 6. Update version.txt
 echo "$new_version" > "$BUILD_OUTPUT_DIR/version.txt"
 
-# 7. Git Operations (Disabled)
-# Git push has been removed from this script to give you full control.
-# Check 'Build/version.txt' and 'Resolver.xcodeproj' for version changes.
+# 7. Git Operations
+echo "Committing and Pushing to GitHub..."
+cd "$PROJECT_DIR"
+git add .
+git commit -m "v$new_version"
+git push
 
 echo "✅ Deployment complete! Version $new_version is live."
