@@ -267,7 +267,9 @@ struct DropDownMenu: View {
                 withAnimation { activePage = .main }
             }) {
                 Image(systemName: "chevron.left")
-                    .font(.caption)
+                    .font(.body.weight(.bold)) // Bolder, larger icon
+                    .frame(width: 36, height: 32, alignment: .leading) // Large Hit Area
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             
@@ -276,7 +278,10 @@ struct DropDownMenu: View {
             Spacer()
             
             // Empty view to balance layout
-            Image(systemName: "chevron.left").font(.caption).opacity(0)
+            Image(systemName: "chevron.left")
+                .font(.body.weight(.bold))
+                .frame(width: 36, height: 32)
+                .opacity(0)
         }
         .padding(.bottom, 8)
     }

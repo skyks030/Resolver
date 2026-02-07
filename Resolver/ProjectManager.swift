@@ -88,6 +88,15 @@ class ProjectManager: ObservableObject {
         save()
     }
     
+    func renameProject(id: UUID, newName: String) {
+        guard let index = projects.firstIndex(where: { $0.id == id }) else { return }
+        projects[index].name = newName
+        if currentProject?.id == id {
+            currentProject = projects[index]
+        }
+        save()
+    }
+    
     func addIndexingRun(to projectId: UUID, clips: [ClipData]) {
         guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
         

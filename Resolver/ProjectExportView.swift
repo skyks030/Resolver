@@ -6,6 +6,8 @@ struct ProjectExportView: View {
     @State private var selectedRunId: UUID?
     @State private var showDeleteConfirmation = false
     @State private var isEditing = false
+    @State private var showRenameAlert = false
+    @State private var editingProjectName = ""
     
     // Column Toggles
     @State private var showVfxName = true
@@ -24,6 +26,15 @@ struct ProjectExportView: View {
                     VStack(alignment: .leading) {
                         // Project Selector
                         Menu {
+                            Button("Rename Project...") {
+                                if let p = projectManager.currentProject {
+                                    editingProjectName = p.name
+                                    showRenameAlert = true
+                                }
+                            }
+                            
+                            Divider()
+                            
                             ForEach(projectManager.projects) { p in
                                 Button(action: {
                                     projectManager.selectProject(p.id)
@@ -40,12 +51,14 @@ struct ProjectExportView: View {
                                 Text(project.name)
                                     .font(.title)
                                     .bold()
+                                    .foregroundColor(.primary)
                                 Image(systemName: "chevron.down")
                                     .font(.title3)
                                     .foregroundColor(.secondary)
                             }
+                            .contentShape(Rectangle())
                         }
-                        .menuStyle(.borderlessButton)
+                        .buttonStyle(.plain)
                         
                         // Summary
                         if let run = getSelectedRun(project: project) {
@@ -198,6 +211,15 @@ struct ProjectExportView: View {
             }
         }
         .frame(minWidth: 800, minHeight: 500)
+        .alert("Rename Project", isPresented: $showRenameAlert) {
+            TextField("New Name", text: $editingProjectName)
+            Button("Rename") {
+                if let project = projectManager.currentProject {
+                    projectManager.renameProject(id: project.id, newName: editingProjectName)
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        }
         .onAppear {
             // Select newest run by default
             if let project = projectManager.currentProject, let lastRun = project.runs.last {
