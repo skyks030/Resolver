@@ -9,6 +9,7 @@ struct DropDownMenu: View {
     @State private var showVfxInput = false
     @State private var vfxTrack = ""
     @State private var showMarkerMgmt = false
+    @State private var showGroupMgmt = false
     
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -87,6 +88,35 @@ struct DropDownMenu: View {
                 .padding(.vertical, 4)
                 .transition(.opacity)
 
+            } else if showGroupMgmt {
+                // Group Management View
+                VStack(spacing: 6) {
+                    Text("Group Mgmt")
+                        .font(.headline)
+                        .scaleEffect(0.9)
+                    
+                    Text("Del. Resolver Groups?")
+                        .font(.caption2)
+                        .multilineTextAlignment(.center)
+                        .foregroundColor(.secondary)
+                    
+                    Button("Delete All") {
+                        PyScriptRunner.run(scriptName: "clean-groups", showOutput: showOutput, enableDownload: false)
+                        withAnimation { showGroupMgmt = false }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                    .controlSize(.small)
+                    
+                    Button("Cancel") {
+                        withAnimation { showGroupMgmt = false }
+                    }
+                    .controlSize(.small)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .transition(.opacity)
+
             } else {
                 // Main Menu View
                 MenuRow(title: "VFX") {
@@ -97,6 +127,10 @@ struct DropDownMenu: View {
                     withAnimation { showMarkerMgmt = true }
                 }
                 
+                MenuRow(title: "Group Management") {
+                    withAnimation { showGroupMgmt = true }
+                }
+                
                 Divider()
                     .padding(.vertical, 2)
                 
@@ -105,6 +139,7 @@ struct DropDownMenu: View {
                         NSWorkspace.shared.open(url)
                     }
                 }
+
 
                 MenuRow(title: "Check Update") {
                     UpdateChecker.runUpdateCheck(showOutput: true)
