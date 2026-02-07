@@ -19,5 +19,9 @@ struct ResolverApp: App {
             ProjectExportView()
                 .environmentObject(projectManager)
         }
+        
+        Window("Marker Manager", id: "marker-tool") {
+            MarkerToolView()
+        }
     }
 }
