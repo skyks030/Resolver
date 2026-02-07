@@ -119,15 +119,8 @@ fi
 # 6. Update version.txt
 echo "$new_version" > "$BUILD_OUTPUT_DIR/version.txt"
 
-# 7. Git Operations
-echo "Committing and pushing to GitHub..."
-# Go to project root for git operations
-cd "$PROJECT_DIR"
-
-git add Resolver.xcodeproj/project.pbxproj
-git add Build/version.txt
-git add Build/Resolver.dmg
-git commit -m "Release version $new_version"
-git push origin main
+# 7. Git Operations (Disabled)
+# Git push has been removed from this script to give you full control.
+# Check 'Build/version.txt' and 'Resolver.xcodeproj' for version changes.
 
 echo "✅ Deployment complete! Version $new_version is live."
