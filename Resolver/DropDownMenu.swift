@@ -8,8 +8,11 @@ struct DropDownMenu: View {
     @State private var enableDownload = true
     
     // VFX Input State
+    enum VfxAction { case index, group }
+    @State private var vfxAction: VfxAction = .index
     @State private var showVfxInput = false
     @State private var vfxTrack = ""
+    
     @State private var showMarkerMgmt = false
     @State private var showGroupMgmt = false
     
@@ -23,9 +26,13 @@ struct DropDownMenu: View {
             if showVfxInput {
                 // Input View
                 VStack(spacing: 6) {
-                    Text("VFX Video Spur")
+                    Text(vfxAction == .index ? "Index Clips" : "Group Clips")
                         .font(.headline)
                         .scaleEffect(0.9)
+                    
+                    Text("VFX Track #")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
                     
                     TextField("#", text: $vfxTrack)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
@@ -199,7 +206,13 @@ struct DropDownMenu: View {
                     Divider().padding(.vertical, 4)
                 }
 
-                MenuRow(title: "VFX") {
+                MenuRow(title: "Index VFX-Clips") {
+                    vfxAction = .index
+                    withAnimation { showVfxInput = true }
+                }
+                
+                MenuRow(title: "Create Clip-Groups") {
+                    vfxAction = .group
                     withAnimation { showVfxInput = true }
                 }
 
@@ -249,12 +262,20 @@ struct DropDownMenu: View {
         guard !vfxTrack.isEmpty else { return }
         
         let trackArg = vfxTrack
-        // If project selected, we do NOT show global alert (we consume it).
-        // If NO project selected, we show alert (legacy).
+        
+        if vfxAction == .group {
+            // Grouping: Just run script, show output if any (it logs CSV-like but we just display it if needed)
+            // User didn't ask to save group data to Project, so we treat it like a simple script run.
+            PyScriptRunner.run(scriptName: "clip-grouping", args: [trackArg], showOutput: true, enableDownload: false)
+            withAnimation { showVfxInput = false }
+            vfxTrack = ""
+            return
+        }
+        
+        // Indexing: Existing Logic
         let shouldShowOutput = projectManager.currentProject == nil
         
         PyScriptRunner.run(scriptName: "clip-indexing", args: [trackArg], showOutput: false, enableDownload: false) { output in
-            // Handle output on Main Thread
             DispatchQueue.main.async {
                 withAnimation { showVfxInput = false }
                 vfxTrack = ""
@@ -264,19 +285,16 @@ struct DropDownMenu: View {
                 // Try to decode JSON
                 if let clips = try? JSONDecoder().decode([ClipData].self, from: data) {
                     if let project = projectManager.currentProject {
-                        // Add to project
                         projectManager.addClips(to: project.id, clips: clips)
-                        // Maybe play a sound or show a small checkmark?
                         print("Saved \(clips.count) clips to project")
                     } else {
-                        // Legacy handling: Convert to CSV and show Alert
+                        // Legacy handling
                         let header = "VFX-Name,Rec-TC-In,Rec-TC-Out,File-Names\n"
                         let rows = clips.map { "\($0.vfxName),\($0.tcIn),\($0.tcOut),\($0.fileNames)" }.joined(separator: "\n")
                         let csv = header + rows
                         showAlert(csv)
                     }
                 } else {
-                    // Fallback if not valid JSON (e.g. error message)
                     if shouldShowOutput {
                         showAlert(output)
                     }
