@@ -136,4 +136,80 @@ for clip in videospur:
         # Clip ist vor dem ersten Marker -> Ignorieren oder Warning?
         # Laut Useranforderung: "alle Clips die nach einem solchen Marker gefunden werden"
         pass
+    
+    for clip in videospur:
+        vfx_in = clip.GetStart()
+        vfx_out = clip.GetEnd()
+
+        relative_start = vfx_in - timeline_start_frame
+        relative_end = vfx_out - timeline_start_frame
+        
+        # Gruppennamen mit laufender Nummerierung in Zehnerschritten
+        suffix = str(vfx_number * 10).zfill(4)
+        vfx_name = f"{timeline_name}_{suffix}"
+        vfx_number += 1
+        #print(vfx_number,vfx_name)
+
+        # Gruppe erstellen
+        old_color_groups = project.GetColorGroupsList()
+        for group in old_color_groups:
+            if group.GetName() == vfx_name:
+                project.DeleteColorGroup(group)
+                
+
+        color_group = project.AddColorGroup(vfx_name)
+        if not color_group:
+            print("❌ Gruppe konnte nicht erstellt werden. ")
+            sys.exit(0)
+
+
+    # timeline Marker löschen
+
+        old_markers = timeline.GetMarkers()
+        for frame_id, marker_name in old_markers.items():
+            if marker_name["note"] == vfx_name:
+                #print(f"  Note: {marker_name['note']}")
+                timeline.DeleteMarkerAtFrame(frame_id)
+                #timeline.DeleteMarker(marker_name['note'])
+        
+
+        # Timeline-Marker setzen
+        timeline.AddMarker(relative_start, "Green", "VFX In", vfx_name, 1)
+        timeline.AddMarker(relative_end - 1, "Red", "VFX Out", vfx_name, 1)
+
+        
+        # Alle Clips aus allen Videospuren analysieren und zur 'vfx_plates' hinzufügen
+        vfx_plates = []
+        for track_index in range(1, track_count + 1):
+            clips = timeline.GetItemListInTrack("video", track_index)
+            for clip in clips:
+                if clip.GetEnd() > vfx_in and clip.GetStart() < vfx_out:
+                    vfx_plates.append(clip)
+
+        
+
+        # clip in 'vfx_plates' zu 'color_group' hinzufügen
+        for item in vfx_plates:
+            item.AssignToColorGroup(color_group)
+
+        rec_tc_in = "{:02}:{:02}:{:02}:{:02}".format(
+            int(vfx_in // (3600 * frame_rate)),
+            int((vfx_in % (3600 * frame_rate)) // (60 * frame_rate)),
+            int((vfx_in % (60 * frame_rate)) // frame_rate),
+            int(vfx_in % frame_rate)
+        )
+        rec_tc_out = "{:02}:{:02}:{:02}:{:02}".format(
+            int(vfx_out // (3600 * frame_rate)),
+            int((vfx_out % (3600 * frame_rate)) // (60 * frame_rate)),
+            int((vfx_out % (60 * frame_rate)) // frame_rate),
+            int(vfx_out % frame_rate)
+        )
+
+
+        clip_file_names = ",".join([item.GetName() for item in vfx_plates])
+        #source_tc_in = "\n".join([clip.GetStartTimecode() for item in group_clips])
+        #source_tc_out = "\n".join([clip.GetEndTimecode() for item in group_clips])
+
+        print(f"{vfx_name},{rec_tc_in},{rec_tc_out},{clip_file_names}")
+
 
