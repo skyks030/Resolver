@@ -61,7 +61,17 @@ final class UpdateChecker: ObservableObject {
             return
         }
 
-        URLSession.shared.dataTask(with: url) { data, _, error in
+        // Create Request with Cache Busting Policies
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.timeoutInterval = 15.0 // Fail faster if network is bad
+        
+        // Add Headers to force fresh content from GitHub/CDN
+        request.setValue("no-cache, no-store, must-revalidate", forHTTPHeaderField: "Cache-Control")
+        request.setValue("no-cache", forHTTPHeaderField: "Pragma")
+        request.setValue("0", forHTTPHeaderField: "Expires")
+
+        URLSession.shared.dataTask(with: request) { data, _, error in
             if let error = error {
                 if showOutput {
                     DispatchQueue.main.async {
