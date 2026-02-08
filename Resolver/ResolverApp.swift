@@ -28,6 +28,10 @@ struct ResolverApp: App {
             SettingsView()
         }
         
+        Window("Double Clip Finder", id: "double-clips") {
+            DoubleClipsView()
+        }
+        
         
         Window("Marker Manager", id: "marker-tool") {
             MarkerToolView()

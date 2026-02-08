@@ -229,6 +229,12 @@ struct DropDownMenu: View {
                 NSApplication.shared.activate(ignoringOtherApps: true)
                 menuWindow?.orderOut(nil)
             }
+
+            MenuRow(title: "Reveal Double Clips") {
+                openWindow(id: "double-clips")
+                NSApplication.shared.activate(ignoringOtherApps: true)
+                menuWindow?.orderOut(nil)
+            }
             
             Divider().padding(.vertical, 4)
             
