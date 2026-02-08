@@ -66,7 +66,8 @@ class PyScriptRunner {
         env["PYTHONUNBUFFERED"] = "1" 
         task.environment = env
         
-        let needsOutput = showOutput || completion != nil
+        let isDebugMode = UserDefaults.standard.bool(forKey: "isDebugMode")
+        let needsOutput = showOutput || isDebugMode || completion != nil
 
         if needsOutput {
             let pipe = Pipe()
@@ -86,7 +87,7 @@ class PyScriptRunner {
                     // Cleanup
                     try? FileManager.default.removeItem(at: tempOutputFile)
                     
-                    if showOutput {
+                    if showOutput || isDebugMode {
                         showOutputWindow(fileOutput, enableDownload: enableDownload)
                     }
                     completion?(fileOutput)
@@ -96,7 +97,7 @@ class PyScriptRunner {
                 // 2. Fallback: Pipe Output (Legacy or Error)
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 if let output = String(data: data, encoding: .utf8), !output.isEmpty {
-                    if showOutput {
+                    if showOutput || isDebugMode {
                         showOutputWindow(output, enableDownload: enableDownload)
                     }
                     completion?(output)
@@ -116,16 +117,20 @@ class PyScriptRunner {
     
     private static func showOutputWindow(_ output: String, enableDownload: Bool) {
         let alert = NSAlert()
-        alert.messageText = "Resolver:"
+        alert.messageText = "Resolver Debug Log:"
         alert.informativeText = output
         alert.addButton(withTitle: "OK")
 
         if enableDownload {
             alert.addButton(withTitle: "Herunterladen")
         }
+        
+        // Always add Copy button
+        alert.addButton(withTitle: "Copy Log")
 
         let response = alert.runModal()
 
+        // Handle Download
         if enableDownload && response == .alertSecondButtonReturn {
             let panel = NSSavePanel()
             panel.title = "Speichere CSV-Ausgabe"
@@ -140,6 +145,17 @@ class PyScriptRunner {
                     print("❌ Fehler beim Speichern der Datei: \(error.localizedDescription)")
                 }
             }
+        }
+        
+        // Handle Copy (3rd button if download enabled, 2nd otherwise)
+        let copyButtonResponse: NSApplication.ModalResponse = enableDownload ? .alertThirdButtonReturn : .alertSecondButtonReturn
+        
+        if response == copyButtonResponse {
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(output, forType: .string)
+            // Optional: Show a small feedback tone or temporary alert? Standard macOS copy is usually silent or just works.
+            // We could loop and show message "Copied", but that blocks logic.
         }
     }
 }

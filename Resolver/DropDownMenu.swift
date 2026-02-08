@@ -8,6 +8,7 @@ struct DropDownMenu: View {
     @State private var showOutput = true
     @State private var enableDownload = true
     @State private var menuWindow: NSWindow?
+    @AppStorage("isDebugMode") private var isDebugMode = false
     
     // Navigation State
     enum MenuPage {
@@ -103,7 +104,9 @@ struct DropDownMenu: View {
             
             if projectManager.currentProject != nil {
                 MenuRow(title: "Export Data") {
-                    openWindow(id: "export")
+                    // Activate regular app mode (Dock Icon)
+                    NSApp.setActivationPolicy(.regular)
+                    openWindow(id: "export") // This might be redundant if we ARE in the export window, but safe.
                     NSApplication.shared.activate(ignoringOtherApps: true)
                     menuWindow?.orderOut(nil)
                 }
@@ -226,22 +229,29 @@ struct DropDownMenu: View {
                 NSApplication.shared.activate(ignoringOtherApps: true)
                 menuWindow?.orderOut(nil)
             }
+            
+            Divider().padding(.vertical, 4)
+            
+            MenuRow(title: "Debug Mode", icon: isDebugMode ? "checkmark" : nil) {
+                isDebugMode.toggle()
+            }
         }
     }
     
     var moreMenuView: some View {
         VStack(spacing: 4) {
-            header(title: "More Options")
+            header(title: "Application")
             
-            MenuRow(title: "Help") {
-                if let url = URL(string: "https://github.com/skyks030/Resolver") {
-                    NSWorkspace.shared.open(url)
+            MenuRow(title: "Settings...", icon: "gearshape") {
+                if #available(macOS 13, *) {
+                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                } else {
+                    NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
                 }
+                menuWindow?.orderOut(nil)
             }
             
-            MenuRow(title: "Check Update") {
-                UpdateChecker.runUpdateCheck(showOutput: true)
-            }
+
             
             Divider().padding(.vertical, 4)
             
@@ -296,7 +306,7 @@ struct DropDownMenu: View {
         guard !vfxTrack.isEmpty else { return }
         
         let trackArg = vfxTrack
-        menuWindow?.orderOut(nil) // Hide window immediately
+        menuWindow?.orderOut(nil) // Hide popover immediately
         
         if let project = projectManager.currentProject {
             projectManager.updateVfxTrack(projectId: project.id, track: trackArg)
@@ -311,8 +321,12 @@ struct DropDownMenu: View {
         }
         
         // Indexing
+        openWindow(id: "loading")
+        // NSApplication.shared.activate(ignoringOtherApps: true) // Optional, might steal focus from Resolve
+        
         PyScriptRunner.run(scriptName: "clip-indexing", args: [trackArg], showOutput: false) { output in
             DispatchQueue.main.async {
+                closeLoadingWindow()
                 withAnimation { activePage = .main }
                 vfxTrack = ""
                 handleIndexingOutput(output)
@@ -374,6 +388,12 @@ struct DropDownMenu: View {
         alert.informativeText = text
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+    
+    private func closeLoadingWindow() {
+        if let window = NSApplication.shared.windows.first(where: { $0.title == "Processing" }) {
+            window.close()
+        }
     }
 }
 

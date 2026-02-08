@@ -36,7 +36,7 @@ timeline_name = timeline.GetName()
 timeline_start_frame = timeline.GetStartFrame()
 frame_rate = timeline.GetSetting("timelineFrameRate")
 
-resolve.OpenPage("edit")
+#resolve.OpenPage("edit")
 
 # === Clips auf Videospur analysieren ===
 target_track_index = int(sys.argv[1]) if len(sys.argv) > 1 else 1
@@ -131,4 +131,4 @@ for clip in vfx_clips:
         print(f"{vfx_name},{len(vfx_plates)}")
 
 
-resolve.OpenPage("edit")
+#resolve.OpenPage("edit")

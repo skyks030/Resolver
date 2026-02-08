@@ -1,12 +1,24 @@
 import Foundation
 import AppKit
 
-final class UpdateChecker {
+final class UpdateChecker: ObservableObject {
     // MARK: - Konfiguration
     static let versionFileURLString = "https://raw.githubusercontent.com/skyks030/Resolver/main/Build/version.txt"
     static let downloadURLString = "https://raw.githubusercontent.com/skyks030/Resolver/main/Build/Resolver.dmg"
 
-    // MARK: - Öffentliche Methode
+    // MARK: - Observable State
+    @Published var isUpdateAvailable: Bool? = nil
+
+    // MARK: - Instance Method for UI
+    func checkForUpdates() {
+        UpdateChecker.checkIfUpdateAvailable(versionURLString: UpdateChecker.versionFileURLString, showOutput: false) { available, _, _ in
+            DispatchQueue.main.async {
+                self.isUpdateAvailable = available
+            }
+        }
+    }
+
+    // MARK: - Legacy Static Method (App Launch)
     static func runUpdateCheck(showOutput: Bool = false) {
         checkIfUpdateAvailable(versionURLString: versionFileURLString, showOutput: showOutput) { updateAvailable, currentVersion, latestVersion in
             if updateAvailable {
