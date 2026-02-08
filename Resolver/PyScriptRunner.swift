@@ -70,93 +70,105 @@ class PyScriptRunner {
         let needsOutput = showOutput || isDebugMode || completion != nil
 
         if needsOutput {
-            let pipe = Pipe()
             // Create Persistent Log File using CrashManager
-            let logFile = CrashManager.shared.createLogFile(name: scriptName.replacingOccurrences(of: "/", with: "_"))
+            let safeName = scriptName.replacingOccurrences(of: "/", with: "_")
+            let logFile = CrashManager.shared.createLogFile(name: safeName)
             
-            // Re-direct stderr to stdout to capture everything in one pipe?
-            // Or use Tee approach. For simplicity, we pipe both to 'pipe' AND write to file.
-            // BUT: Process can only have ONE standardOutput.
-            // We'll read from pipe and write to file + buffer in memory.
-            
+            // Create Pipe
+            let pipe = Pipe()
             task.standardOutput = pipe
             task.standardError = pipe
             
-            do {
-                try task.run()
-                
-                // Stream data to file and memory
-                let fileHandle = pipe.fileHandleForReading
-                var fullOutput = Data()
-                
-                // Create log file handle
-                FileManager.default.createFile(atPath: logFile.path, contents: nil, attributes: nil)
-                let logHandle = try? FileHandle(forWritingTo: logFile)
-                
-                // Read loop
-                fileHandle.readabilityHandler = { handle in
-                    let data = handle.availableData
-                    if !data.isEmpty {
-                        fullOutput.append(data)
-                        logHandle?.write(data)
-                        // Verify: Flush?
-                    }
-                }
-                
-                task.waitUntilExit()
-                
-                // Cleanup
-                fileHandle.readabilityHandler = nil
-                try? logHandle?.close()
-                
-                let outputString = String(data: fullOutput, encoding: .utf8) ?? ""
-                
-                // 1. Priority: Check JSON File Output (Result)
-                if FileManager.default.fileExists(atPath: tempOutputFile.path),
-                   let fileData = try? Data(contentsOf: tempOutputFile),
-                   !fileData.isEmpty,
-                   let fileOutput = String(data: fileData, encoding: .utf8) {
+            // Prepare File Handle
+            FileManager.default.createFile(atPath: logFile.path, contents: nil, attributes: nil)
+            let logHandle = try? FileHandle(forWritingTo: logFile)
+            
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    try task.run()
                     
-                    // Cleanup Temp Request File
-                    try? FileManager.default.removeItem(at: tempOutputFile)
+                    let fileHandle = pipe.fileHandleForReading
+                    var fullOutput = Data()
                     
-                    // For debug window, show the Process Output (Logs), not the JSON Result
-                     if showOutput || isDebugMode {
-                        showOutputWindow(outputString, enableDownload: enableDownload)
-                    }
-                    completion?(fileOutput)
-                    return
-                }
-                
-                // 2. Fallback: Standard Output
-                if !outputString.isEmpty {
-                    // Check for Missing Dependencies
-                    if outputString.contains("MISSING_DEP:") {
-                        handleMissingDependency(outputString) { success in
-                            if success {
-                                print("✅ Dependency installed.")
-                            }
+                    // Read loop
+                    fileHandle.readabilityHandler = { handle in
+                        let data = handle.availableData
+                        if !data.isEmpty {
+                            fullOutput.append(data)
+                            logHandle?.write(data)
                         }
                     }
                     
-                    if showOutput || isDebugMode {
-                        showOutputWindow(outputString, enableDownload: enableDownload)
+                    task.waitUntilExit()
+                    
+                    // Cleanup
+                    fileHandle.readabilityHandler = nil
+                    try? logHandle?.close()
+                    
+                    let outputString = String(data: fullOutput, encoding: .utf8) ?? ""
+                    let status = task.terminationStatus
+                    
+                    DispatchQueue.main.async {
+                        // 1. Check JSON Output
+                        if FileManager.default.fileExists(atPath: tempOutputFile.path),
+                           let fileData = try? Data(contentsOf: tempOutputFile),
+                           !fileData.isEmpty,
+                           let fileOutput = String(data: fileData, encoding: .utf8) {
+                            
+                            try? FileManager.default.removeItem(at: tempOutputFile)
+                            
+                            if showOutput || isDebugMode {
+                                showOutputWindow(outputString, enableDownload: enableDownload)
+                            }
+                            completion?(fileOutput)
+                            return
+                        }
+                        
+                        // 2. Fallback Output
+                        if !outputString.isEmpty {
+                             if outputString.contains("MISSING_DEP:") {
+                                 handleMissingDependency(outputString) { success in
+                                     if success { print("✅ Dependency installed.") }
+                                 }
+                             }
+                             
+                             if showOutput || isDebugMode {
+                                 showOutputWindow(outputString, enableDownload: enableDownload)
+                             }
+                             completion?(outputString)
+                        } else {
+                             if status != 0 {
+                                 completion?("{\"error\": \"Script failed with Exit Code: \(status)\"}")
+                             } else {
+                                 completion?("{\"error\": \"No output from Python script\"}")
+                             }
+                        }
                     }
-                    completion?(outputString)
-                } else {
-                    completion?("{\"error\": \"No output from Python script (Exit Code: \(task.terminationStatus))\"}")
+                } catch {
+                    DispatchQueue.main.async {
+                        print("❌ Execution error: \(error.localizedDescription)")
+                        completion?("{\"error\": \"Execution failed: \(error.localizedDescription)\"}")
+                    }
                 }
-            } catch {
-                print("❌ Fehler: \(error.localizedDescription)")
-                completion?("{\"error\": \"Execution failed: \(error.localizedDescription)\"}")
             }
         } else {
-            do { try task.run() } catch {
-                print("❌ Fehler: \(error.localizedDescription)")
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    try task.run()
+                    task.waitUntilExit()
+                    DispatchQueue.main.async {
+                        completion?("")
+                    }
+                } catch {
+                    DispatchQueue.main.async {
+                        print("❌ Execution error: \(error.localizedDescription)")
+                    }
+                }
             }
         }
     }
     
+    // Helper to show output window (moved to main thread check inside async block)
     private static func handleMissingDependency(_ output: String, completion: @escaping (Bool) -> Void) {
         // Parse module name (e.g. MISSING_DEP:xlsxwriter)
         guard let range = output.range(of: "MISSING_DEP:"),
@@ -216,7 +228,6 @@ class PyScriptRunner {
     private static func showOutputWindow(_ output: String, enableDownload: Bool) {
         let alert = NSAlert()
         alert.messageText = "Resolver Debug Log:"
-        // alert.informativeText = output // Too large!
         
         let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 500, height: 300))
         scrollView.hasVerticalScroller = true
@@ -229,7 +240,7 @@ class PyScriptRunner {
         textView.textContainer?.containerSize = NSSize(width: scrollView.contentSize.width, height: CGFloat.greatestFiniteMagnitude)
         textView.textContainer?.widthTracksTextView = true
         textView.string = output
-        textView.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular) // Monospace for logs
+        textView.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
         
         scrollView.documentView = textView
         alert.accessoryView = scrollView
@@ -239,12 +250,10 @@ class PyScriptRunner {
             alert.addButton(withTitle: "Herunterladen")
         }
         
-        // Always add Copy button
         alert.addButton(withTitle: "Copy Log")
 
         let response = alert.runModal()
 
-        // Handle Download
         if enableDownload && response == .alertSecondButtonReturn {
             let panel = NSSavePanel()
             panel.title = "Speichere CSV-Ausgabe"
@@ -252,24 +261,16 @@ class PyScriptRunner {
             panel.nameFieldStringValue = "output.csv"
 
             if panel.runModal() == .OK, let url = panel.url {
-                do {
-                    try output.write(to: url, atomically: true, encoding: .utf8)
-                    print("✅ CSV gespeichert: \(url.path)")
-                } catch {
-                    print("❌ Fehler beim Speichern der Datei: \(error.localizedDescription)")
-                }
+                try? output.write(to: url, atomically: true, encoding: .utf8)
             }
         }
         
-        // Handle Copy (3rd button if download enabled, 2nd otherwise)
         let copyButtonResponse: NSApplication.ModalResponse = enableDownload ? .alertThirdButtonReturn : .alertSecondButtonReturn
         
         if response == copyButtonResponse {
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
             pasteboard.setString(output, forType: .string)
-            // Optional: Show a small feedback tone or temporary alert? Standard macOS copy is usually silent or just works.
-            // We could loop and show message "Copied", but that blocks logic.
         }
     }
 }

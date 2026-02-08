@@ -61,7 +61,10 @@ struct CrashObserver: View {
         EmptyView()
             .onAppear {
                 if crashManager.hasCrashReport {
-                    openWindow(id: "crash-report")
+                    // Slight delay to ensure window system is ready
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        openWindow(id: "crash-report")
+                    }
                 }
             }
             .onChange(of: crashManager.hasCrashReport) { hasCrash in
