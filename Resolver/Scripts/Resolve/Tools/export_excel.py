@@ -74,6 +74,7 @@ def export_excel(payload_path):
                         })
                     continue
                 elif header == "VFX-Name": val = clip.get("vfxName", "")
+                elif header == "Duration": val = clip.get("duration", "")
                 elif header == "Rec-TC-In": val = clip.get("tcIn", "")
                 elif header == "Rec-TC-Out": val = clip.get("tcOut", "")
                 elif header == "Source-TC-In": val = clip.get("sourceTcIn", "")

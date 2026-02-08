@@ -252,6 +252,10 @@ try:
                         # print(json.dumps({"status": "debug", "message": f"Dir content: {os.listdir(output_dir)}"}))
 
                     processed_count += 1
+                    
+                    # === Progress Update ===
+                    print(f"PROGRESS: {processed_count}/{len(clips)}")
+                    sys.stdout.flush()
                 else:
                     print(json.dumps({"status": "debug", "message": "GrabStill returned None"}))
                     
