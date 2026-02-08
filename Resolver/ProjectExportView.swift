@@ -191,45 +191,27 @@ struct ProjectExportView: View {
                 
                 Divider().padding(.horizontal, 8)
 
-                Button {
-                    PyScriptRunner.run(scriptName: "Resolve/Tools/clean_all_resolver_markers", showOutput: false)
-                } label: {
-                    Label("Clean Markers", systemImage: "trash")
+                // Marker Operations
+                HStack(spacing: 12) {
+                    Button { performBatchOp(type: "scene", action: "create", project: project) } label: {
+                         Label("Add Scenes", systemImage: "film")
+                    }
+                    .help("Re-create Scene Markers in Timeline")
+
+                    Button { performBatchOp(type: "vfx", action: "create", project: project) } label: {
+                        Label("Add VFX", systemImage: "wand.and.stars")
+                    }
+                    .help("Create VFX Markers depending on Indexing Run")
+
+                    Button {
+                        PyScriptRunner.run(scriptName: "Resolve/Tools/clean_all_resolver_markers", showOutput: false)
+                    } label: {
+                        Label("Clean All", systemImage: "trash")
+                    }
+                    .help("Delete ALL Resolver Markers (Scene & VFX) from the Timeline")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .help("Delete ALL Resolver Markers (Scene & VFX) from the Timeline")
-                
-                Divider().padding(.horizontal, 8)
-                
-                // Marker Toggles
-                HStack(spacing: 12) {
-                    // Scene Markers
-                    VStack(spacing: 2) {
-                        Text("Scenes").font(.caption2).foregroundColor(.secondary)
-                        ControlGroup {
-                            Button { performBatchOp(type: "scene", action: "create", project: project) } label: { Image(systemName: "eye") }
-                                .help("Show Scene Markers")
-                            Button { performBatchOp(type: "scene", action: "delete", project: project) } label: { Image(systemName: "eye.slash") }
-                                .help("Hide Scene Markers")
-
-                        }
-                        .controlGroupStyle(.navigation)
-                    }
-                    
-                    // VFX Markers
-                    VStack(spacing: 2) {
-                        Text("VFX").font(.caption2).foregroundColor(.secondary)
-                        ControlGroup {
-                            Button { performBatchOp(type: "vfx", action: "create", project: project) } label: { Image(systemName: "eye") }
-                                .help("Show VFX Markers")
-                            Button { performBatchOp(type: "vfx", action: "delete", project: project) } label: { Image(systemName: "eye.slash") }
-                                .help("Hide VFX Markers")
-
-                        }
-                        .controlGroupStyle(.navigation)
-                    }
-                }
             }
         }
         .padding()
@@ -327,11 +309,7 @@ struct ProjectExportView: View {
     }
     
     private func countScenes(in run: IndexingRun) -> Int {
-        let prefixes = run.clips.compactMap { clip -> String? in
-            let parts = clip.vfxName.split(separator: "_")
-            return parts.first.map(String.init)
-        }
-        return Set(prefixes).count
+        return run.sceneMarkers?.count ?? 0
     }
 
     private func getSelectedRun(project: Project) -> IndexingRun? {

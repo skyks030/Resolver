@@ -58,15 +58,42 @@ class PyScriptRunner {
         arguments.append(contentsOf: args)
         task.arguments = arguments
         
+        // Environment for File-Based Output (to avoid Pipe Deadlocks)
+        var env = ProcessInfo.processInfo.environment
+        let tempOutputFile = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+        env["RESOLVER_OUTPUT_FILE"] = tempOutputFile.path
+        // Specific Fix for macOS GUI Apps knowing where to look for modules if needed
+        env["PYTHONUNBUFFERED"] = "1" 
+        task.environment = env
+        
         let needsOutput = showOutput || completion != nil
 
         if needsOutput {
             let pipe = Pipe()
             task.standardOutput = pipe
             task.standardError = pipe
+            
             do {
                 try task.run()
                 task.waitUntilExit()
+                
+                // 1. Priority: Check File Output
+                if FileManager.default.fileExists(atPath: tempOutputFile.path),
+                   let fileData = try? Data(contentsOf: tempOutputFile),
+                   !fileData.isEmpty,
+                   let fileOutput = String(data: fileData, encoding: .utf8) {
+                    
+                    // Cleanup
+                    try? FileManager.default.removeItem(at: tempOutputFile)
+                    
+                    if showOutput {
+                        showOutputWindow(fileOutput, enableDownload: enableDownload)
+                    }
+                    completion?(fileOutput)
+                    return
+                }
+                
+                // 2. Fallback: Pipe Output (Legacy or Error)
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 if let output = String(data: data, encoding: .utf8), !output.isEmpty {
                     if showOutput {

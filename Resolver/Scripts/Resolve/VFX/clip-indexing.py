@@ -94,11 +94,22 @@ try:
 
     if markers:
         for frame_id, marker_data in markers.items():
-            if marker_data['color'] == 'Cream':
+            # Check for EXACT Scene Marker attributes
+            # Color: Cream
+            # Note: Resolver Scene Marker
+            note = marker_data.get('note', '')
+            
+            if marker_data['color'] == 'Cream' and note == 'Resolver Scene Marker':
+                # FIX: Handle Relative vs Absolute Frames
+                # If frame_id is very small (relative to start), add start_frame
+                marker_abs = frame_id
+                if frame_id < timeline_start_frame:
+                    marker_abs = frame_id + timeline_start_frame
+                    
                 white_markers.append({
-                    'frame': frame_id,
+                    'frame': marker_abs,
                     'name': marker_data['name'],
-                    'note': marker_data['note']
+                    'note': note
                 })
 
     # Sortiere Marker nach Frame-ID aufsteigend
@@ -205,8 +216,15 @@ try:
         "sceneMarkers": scene_markers_output
     }
 
-    print(json.dumps(final_output, indent=2))
-    sys.stdout.flush()
+    output_file = os.environ.get("RESOLVER_OUTPUT_FILE")
+    if output_file:
+        with open(output_file, 'w') as f:
+            json.dump(final_output, f, indent=2)
+        # Optional: Print a small status message to stdout, which won't block
+        print(f"✅ Data written to {output_file}")
+    else:
+        print(json.dumps(final_output, indent=2))
+        sys.stdout.flush()
 
 except Exception as e:
     # Wir printen den Fehler nicht als JSON-Array (was Swift erwartet), 
