@@ -71,46 +71,78 @@ class PyScriptRunner {
 
         if needsOutput {
             let pipe = Pipe()
+            // Create Persistent Log File using CrashManager
+            let logFile = CrashManager.shared.createLogFile(name: scriptName.replacingOccurrences(of: "/", with: "_"))
+            
+            // Re-direct stderr to stdout to capture everything in one pipe?
+            // Or use Tee approach. For simplicity, we pipe both to 'pipe' AND write to file.
+            // BUT: Process can only have ONE standardOutput.
+            // We'll read from pipe and write to file + buffer in memory.
+            
             task.standardOutput = pipe
             task.standardError = pipe
             
             do {
                 try task.run()
+                
+                // Stream data to file and memory
+                let fileHandle = pipe.fileHandleForReading
+                var fullOutput = Data()
+                
+                // Create log file handle
+                FileManager.default.createFile(atPath: logFile.path, contents: nil, attributes: nil)
+                let logHandle = try? FileHandle(forWritingTo: logFile)
+                
+                // Read loop
+                fileHandle.readabilityHandler = { handle in
+                    let data = handle.availableData
+                    if !data.isEmpty {
+                        fullOutput.append(data)
+                        logHandle?.write(data)
+                        // Verify: Flush?
+                    }
+                }
+                
                 task.waitUntilExit()
                 
-                // 1. Priority: Check File Output
+                // Cleanup
+                fileHandle.readabilityHandler = nil
+                try? logHandle?.close()
+                
+                let outputString = String(data: fullOutput, encoding: .utf8) ?? ""
+                
+                // 1. Priority: Check JSON File Output (Result)
                 if FileManager.default.fileExists(atPath: tempOutputFile.path),
                    let fileData = try? Data(contentsOf: tempOutputFile),
                    !fileData.isEmpty,
                    let fileOutput = String(data: fileData, encoding: .utf8) {
                     
-                    // Cleanup
+                    // Cleanup Temp Request File
                     try? FileManager.default.removeItem(at: tempOutputFile)
                     
-                    if showOutput || isDebugMode {
-                        showOutputWindow(fileOutput, enableDownload: enableDownload)
+                    // For debug window, show the Process Output (Logs), not the JSON Result
+                     if showOutput || isDebugMode {
+                        showOutputWindow(outputString, enableDownload: enableDownload)
                     }
                     completion?(fileOutput)
                     return
                 }
                 
-                // 2. Fallback: Pipe Output (Legacy or Error)
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                if let output = String(data: data, encoding: .utf8), !output.isEmpty {
-                    // Check for Missing Dependencies (Self-Healing)
-                    if output.contains("MISSING_DEP:") {
-                        handleMissingDependency(output) { success in
+                // 2. Fallback: Standard Output
+                if !outputString.isEmpty {
+                    // Check for Missing Dependencies
+                    if outputString.contains("MISSING_DEP:") {
+                        handleMissingDependency(outputString) { success in
                             if success {
-                                // Inform user and suggest retry (or we could auto-retry, but better to be safe)
-                                print("✅ Dependency installed. User should retry action.")
+                                print("✅ Dependency installed.")
                             }
                         }
                     }
                     
                     if showOutput || isDebugMode {
-                        showOutputWindow(output, enableDownload: enableDownload)
+                        showOutputWindow(outputString, enableDownload: enableDownload)
                     }
-                    completion?(output)
+                    completion?(outputString)
                 } else {
                     completion?("{\"error\": \"No output from Python script (Exit Code: \(task.terminationStatus))\"}")
                 }

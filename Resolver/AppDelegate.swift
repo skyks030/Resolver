@@ -5,10 +5,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // App started: Show Dock Icon & Window
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        
+        // Start Session for Crash Detection
+        CrashManager.shared.startSession()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         // App terminating
+        CrashManager.shared.endSession()
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag {

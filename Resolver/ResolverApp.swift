@@ -7,12 +7,14 @@ struct ResolverApp: App {
     
     init() {
         UpdateChecker.runUpdateCheck(showOutput: false)
+        CrashManager.shared.checkForCrash() // Check immediately
     }
     
     var body: some Scene {
         WindowGroup("Resolver", id: "export") {
             ProjectExportView()
                 .environmentObject(projectManager)
+                .background(CrashObserver())
         }
         .commands {
             CommandGroup(replacing: .newItem) {}
@@ -44,5 +46,28 @@ struct ResolverApp: App {
         }
         .windowResizability(.contentSize)
         .windowStyle(.hiddenTitleBar)
+        
+        Window("Crash Report", id: "crash-report") {
+            CrashReportView()
+        }
+    }
+}
+
+struct CrashObserver: View {
+    @Environment(\.openWindow) var openWindow
+    @ObservedObject var crashManager = CrashManager.shared
+    
+    var body: some View {
+        EmptyView()
+            .onAppear {
+                if crashManager.hasCrashReport {
+                    openWindow(id: "crash-report")
+                }
+            }
+            .onChange(of: crashManager.hasCrashReport) { hasCrash in
+                if hasCrash {
+                    openWindow(id: "crash-report")
+                }
+            }
     }
 }
