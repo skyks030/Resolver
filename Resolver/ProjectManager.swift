@@ -14,6 +14,7 @@ struct ClipData: Codable, Identifiable {
     var reelName: String
     var frameStart: Int?
     var frameEnd: Int?
+    var duration: Int?
 }
 
 struct MarkerData: Codable, Identifiable {
@@ -43,6 +44,7 @@ struct Project: Codable, Identifiable {
     var createdDate: Date = Date()
     var runs: [IndexingRun] = []
     var vfxTrackIndex: String? = nil
+    var vfxThumbnailTrackIndex: String? = nil
 }
 
 struct ProjectStore: Codable {
@@ -144,6 +146,16 @@ class ProjectManager: ObservableObject {
     func updateVfxTrack(projectId: UUID, track: String) {
         guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
         projects[index].vfxTrackIndex = track
+        
+        if currentProject?.id == projectId {
+            currentProject = projects[index]
+        }
+        save()
+    }
+
+    func updateVfxThumbnailTrack(projectId: UUID, track: String) {
+        guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[index].vfxThumbnailTrackIndex = track
         
         if currentProject?.id == projectId {
             currentProject = projects[index]

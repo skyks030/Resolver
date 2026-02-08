@@ -25,6 +25,20 @@ except Exception as e:
     print(json.dumps({"error": f"Failed to parse JSON: {e}"}))
     sys.exit(1)
 
+# === Helper: Frames to TC ===
+def frames_to_tc(frames, fps):
+    try:
+        if not fps or float(fps) == 0.0: return "00:00:00:00"
+        fps_float = float(fps)
+        total_seconds = frames / fps_float
+        hours = int(total_seconds // 3600)
+        minutes = int((total_seconds % 3600) // 60)
+        seconds = int(total_seconds % 60)
+        frame_part = int(frames % fps_float)
+        return "{:02}:{:02}:{:02}:{:02}".format(hours, minutes, seconds, frame_part)
+    except:
+        return "00:00:00:00"
+
 output_dir = data.get("outputDir")
 clips = data.get("clips", [])
 export_format = data.get("format", "jpg")
@@ -157,21 +171,55 @@ try:
     try:
         for clip in clips:
             try:
-                frame = int(clip.get("frame", 0))
+                frame_start = int(clip.get("frameStart", 0))
+                frame_end = int(clip.get("frameEnd", 0))
                 name = clip.get("name", "unknown")
                 
-                # print(json.dumps({"status": "debug", "message": f"Processing clip: {name}"}))
+                # Get timeline frame rate
+                # We need it for TC conversion
+                # Note: timeline object is available
+                fps = timeline.GetSetting("timelineFrameRate")
                 
-                tc = clip.get("tc", "")
-                if tc:
-                     # print(json.dumps({"status": "debug", "message": f"Setting TC: {tc}"}))
-                     timeline.SetCurrentTimecode(tc)
+                # Revert to First Frame (User Request)
+                # We use the provided 'tc' (which is Start TC) or calculate from frameStart
+                
+                target_tc = clip.get("tc", "")
+                if not target_tc and frame_start > 0:
+                     target_tc = frames_to_tc(frame_start, fps)
+                
+                if target_tc:
+                     # print(json.dumps({"status": "debug", "message": f"Setting TC: {target_tc}"}))
+                     timeline.SetCurrentTimecode(target_tc)
                 
                 # Grab Still
                 # print(json.dumps({"status": "debug", "message": "Grabbing Still..."}))
+                
+                # Verify what is at the current timecode on the target track
+                # This helps debug why GrabStill might return None (e.g. empty space)
+                # Note: This is an expensive check, so only do it if we are debugging or having issues?
+                # For now, let's just log the TC we are jumping to.
+                
                 still = timeline.GrabStill()
                 
+                if not still:
+                    # Retry once immediately without sleep
+                    still = timeline.GrabStill()
+                    
+                if not still:
+                     # One more try after moving slightly?
+                     pass
+                     
                 if still:
+                    # Clean up existing files for this clip name to prevent duplicates/stale files
+                    # Resolve might export as name.jpg, name.1.1.1.jpg etc.
+                    # We want to remove anything starting with 'name' and ending with our format
+                    try:
+                        existing_files = [f for f in os.listdir(output_dir) if f.startswith(name) and f.lower().endswith(f".{export_format}")]
+                        for ef in existing_files:
+                            os.remove(os.path.join(output_dir, ef))
+                    except Exception as clean_err:
+                        print(json.dumps({"status": "warning", "message": f"Failed to clean old files for {name}: {clean_err}"}))
+
                     # Export
                     target_album.ExportStills([still], output_dir, name, export_format)
                     target_album.DeleteStills([still])

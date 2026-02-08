@@ -13,8 +13,6 @@ struct DropDownMenu: View {
     // Navigation State
     enum MenuPage {
         case main
-        case vfxIndex
-        case vfxGroup
         case newProject
         case delete
         case tools
@@ -36,9 +34,6 @@ struct DropDownMenu: View {
             case .main:
                 mainMenuView
                     .transition(.move(edge: .leading))
-            case .vfxIndex, .vfxGroup:
-                vfxInputView
-                    .transition(.move(edge: .trailing))
             case .newProject:
                 newProjectView
                     .transition(.move(edge: .trailing))
@@ -113,20 +108,6 @@ struct DropDownMenu: View {
                 Divider().padding(.vertical, 4)
             }
             
-            MenuRow(title: "Index VFX-Clips", icon: "chevron.right") {
-                if let track = projectManager.currentProject?.vfxTrackIndex {
-                    vfxTrack = track
-                }
-                withAnimation { activePage = .vfxIndex }
-            }
-            
-            MenuRow(title: "Create Clip-Groups", icon: "chevron.right") {
-                if let track = projectManager.currentProject?.vfxTrackIndex {
-                    vfxTrack = track
-                }
-                withAnimation { activePage = .vfxGroup }
-            }
-            
             MenuRow(title: "Add Scene Marker") {
                 PyScriptRunner.run(scriptName: "add-scene-marker", showOutput: false, enableDownload: false) { _ in
                     DispatchQueue.main.async { NSApplication.shared.hide(nil) }
@@ -151,31 +132,7 @@ struct DropDownMenu: View {
         }
     }
     
-    var vfxInputView: some View {
-        VStack(spacing: 8) {
-            header(title: activePage == .vfxIndex ? "Index Clips" : "Group Clips")
-            
-            Text("VFX Track #")
-                .font(.caption2)
-                .foregroundColor(.secondary)
-            
-            TextField("#", text: $vfxTrack)
-                .textFieldStyle(RoundedBorderTextFieldStyle())
-                .frame(width: 50)
-                .multilineTextAlignment(.center)
-                .onChange(of: vfxTrack) { filterNumeric(newValue: $0) }
-            
-            HStack {
-                Button("Run") { runVfxScript() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(vfxTrack.isEmpty)
-                    .keyboardShortcut(.defaultAction)
-            }
-            .padding(.top, 4)
-        }
-        .padding(.horizontal, 4)
-        .padding(.bottom, 4)
-    }
+
     
     var newProjectView: some View {
         VStack(spacing: 8) {
@@ -308,37 +265,7 @@ struct DropDownMenu: View {
         if vfxTrack.count > 1 { vfxTrack = String(vfxTrack.prefix(1)) }
     }
     
-    private func runVfxScript() {
-        guard !vfxTrack.isEmpty else { return }
-        
-        let trackArg = vfxTrack
-        menuWindow?.orderOut(nil) // Hide popover immediately
-        
-        if let project = projectManager.currentProject {
-            projectManager.updateVfxTrack(projectId: project.id, track: trackArg)
-        }
-        
-        // Grouping
-        if activePage == .vfxGroup {
-            PyScriptRunner.run(scriptName: "clip-grouping", args: [trackArg], showOutput: true)
-            withAnimation { activePage = .main }
-            vfxTrack = ""
-            return
-        }
-        
-        // Indexing
-        openWindow(id: "loading")
-        // NSApplication.shared.activate(ignoringOtherApps: true) // Optional, might steal focus from Resolve
-        
-        PyScriptRunner.run(scriptName: "clip-indexing", args: [trackArg], showOutput: false) { output in
-            DispatchQueue.main.async {
-                closeLoadingWindow()
-                withAnimation { activePage = .main }
-                vfxTrack = ""
-                handleIndexingOutput(output)
-            }
-        }
-    }
+
     
     private func handleIndexingOutput(_ output: String?) {
         guard let output = output else { return }

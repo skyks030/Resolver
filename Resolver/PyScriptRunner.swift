@@ -97,6 +97,16 @@ class PyScriptRunner {
                 // 2. Fallback: Pipe Output (Legacy or Error)
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 if let output = String(data: data, encoding: .utf8), !output.isEmpty {
+                    // Check for Missing Dependencies (Self-Healing)
+                    if output.contains("MISSING_DEP:") {
+                        handleMissingDependency(output) { success in
+                            if success {
+                                // Inform user and suggest retry (or we could auto-retry, but better to be safe)
+                                print("✅ Dependency installed. User should retry action.")
+                            }
+                        }
+                    }
+                    
                     if showOutput || isDebugMode {
                         showOutputWindow(output, enableDownload: enableDownload)
                     }
@@ -115,10 +125,82 @@ class PyScriptRunner {
         }
     }
     
+    private static func handleMissingDependency(_ output: String, completion: @escaping (Bool) -> Void) {
+        // Parse module name (e.g. MISSING_DEP:xlsxwriter)
+        guard let range = output.range(of: "MISSING_DEP:"),
+              let endRange = output[range.upperBound...].range(of: "\"") else {
+            return
+        }
+        
+        let module = String(output[range.upperBound..<endRange.lowerBound])
+        
+        DispatchQueue.main.async {
+            let alert = NSAlert()
+            alert.messageText = "Missing Python Library"
+            alert.informativeText = "Resolver require the '\(module)' library to perform this action. Would you like to install it now?\n\n(Requires internet connection)"
+            alert.addButton(withTitle: "Install Now")
+            alert.addButton(withTitle: "Cancel")
+            
+            if alert.runModal() == .alertFirstButtonReturn {
+                installModule(module, completion: completion)
+            } else {
+                completion(false)
+            }
+        }
+    }
+    
+    private static func installModule(_ module: String, completion: @escaping (Bool) -> Void) {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        task.arguments = ["-m", "pip", "install", module]
+        
+        do {
+            try task.run()
+            task.waitUntilExit()
+            
+            DispatchQueue.main.async {
+                let success = task.terminationStatus == 0
+                let alert = NSAlert()
+                alert.messageText = success ? "Installation Successful" : "Installation Failed"
+                alert.informativeText = success ?
+                    "The '\(module)' library has been installed. Please try your action again." :
+                    "Failed to install '\(module)'. Please try running 'pip3 install \(module)' manually in the Terminal."
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+                completion(success)
+            }
+        } catch {
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "Installation Error"
+                alert.informativeText = error.localizedDescription
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+                completion(false)
+            }
+        }
+    }
+    
     private static func showOutputWindow(_ output: String, enableDownload: Bool) {
         let alert = NSAlert()
         alert.messageText = "Resolver Debug Log:"
-        alert.informativeText = output
+        // alert.informativeText = output // Too large!
+        
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 500, height: 300))
+        scrollView.hasVerticalScroller = true
+        scrollView.borderType = .bezelBorder
+        
+        let textView = NSTextView(frame: scrollView.bounds)
+        textView.isEditable = false
+        textView.isVerticallyResizable = true
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.containerSize = NSSize(width: scrollView.contentSize.width, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = true
+        textView.string = output
+        textView.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular) // Monospace for logs
+        
+        scrollView.documentView = textView
+        alert.accessoryView = scrollView
         alert.addButton(withTitle: "OK")
 
         if enableDownload {

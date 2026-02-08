@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ProjectExportView: View {
     @EnvironmentObject var projectManager: ProjectManager
@@ -9,6 +10,14 @@ struct ProjectExportView: View {
     @State private var showRenameAlert = false
     @State private var showDeleteProjectConfirmation = false
     @State private var editingProjectName = ""
+    
+    // Indexing Error Alert
+    @State private var showIndexingError = false
+    @State private var indexingErrorMessage = ""
+    
+    // Indexing Warning Alert
+    @State private var showIndexingWarning = false
+    @State private var indexingWarningMessage = ""
     
     // Column Toggles
     @State private var showThumbnails = true
@@ -24,6 +33,23 @@ struct ProjectExportView: View {
     @State private var showSourceTcOut = true
     @State private var showFileNames = true
     @State private var showReelName = true
+    @State private var showDuration = true
+    
+    // VFX Indexing State
+    @State private var vfxTrack = "1"
+    
+    // Thumbnail Track State
+    @State private var vfxThumbnailTrack = "1"
+    
+    @State private var isIndexing = false
+    @State private var loadingMessage = ""
+    
+    
+    // Export Formats
+    enum ExportFormat {
+        case csv
+        case excel
+    }
     
     // Settings
     @AppStorage("thumbnailFormat") private var thumbnailFormat: String = "jpg"
@@ -85,14 +111,32 @@ struct ProjectExportView: View {
         } message: {
             Text("Are you sure you want to delete this project and all its data? This cannot be undone.")
         }
+        .alert("Indexing Error", isPresented: $showIndexingError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(indexingErrorMessage)
+        }
+        .alert("Indexing Warning", isPresented: $showIndexingWarning) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(indexingWarningMessage)
+        }
         .onAppear {
-            if let project = projectManager.currentProject, let lastRun = project.runs.last {
-                selectedRunId = lastRun.id
+            if let project = projectManager.currentProject {
+                if let lastRun = project.runs.last {
+                    selectedRunId = lastRun.id
+                }
+                vfxTrack = project.vfxTrackIndex ?? "1"
+                vfxThumbnailTrack = project.vfxThumbnailTrackIndex ?? "1"
             }
         }
         .onChange(of: projectManager.currentProject?.id) { _ in
-            if let project = projectManager.currentProject, let lastRun = project.runs.last {
-                selectedRunId = lastRun.id
+            if let project = projectManager.currentProject {
+                if let lastRun = project.runs.last {
+                    selectedRunId = lastRun.id
+                }
+                vfxTrack = project.vfxTrackIndex ?? "1"
+                vfxThumbnailTrack = project.vfxThumbnailTrackIndex ?? "1"
             }
         }
         .onChange(of: projectManager.currentProject?.runs.count) { _ in
@@ -108,68 +152,111 @@ struct ProjectExportView: View {
     private func headerView(project: Project) -> some View {
         HStack {
             VStack(alignment: .leading) {
-                // Project Selector
-                Menu {
-                    Button("Rename Project...") {
-                        if let p = projectManager.currentProject {
-                            editingProjectName = p.name
-                            showRenameAlert = true
-                        }
-                    }
-                    
-                    Button("Delete Project...", role: .destructive) {
-                        showDeleteProjectConfirmation = true
-                    }
-                    
-                    Divider()
-                    
-                    ForEach(projectManager.projects) { p in
-                        Button(action: {
-                            projectManager.selectProject(p.id)
-                        }) {
-                            if p.id == project.id {
-                                Label(p.name, systemImage: "checkmark")
-                            } else {
-                                Text(p.name)
+                // Row 1: Project Name, Rename, Delete, Spacer, Indexing
+                HStack(spacing: 15) {
+                    Menu {
+                        ForEach(projectManager.projects) { p in
+                            Button(action: {
+                                projectManager.selectProject(p.id)
+                            }) {
+                                if p.id == project.id {
+                                    Label(p.name, systemImage: "checkmark")
+                                } else {
+                                    Text(p.name)
+                                }
                             }
                         }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(project.name)
+                                .font(.title2)
+                                .bold()
+                                .foregroundColor(.primary)
+                            Image(systemName: "chevron.down")
+                                .font(.headline)
+                                .foregroundColor(.secondary)
+                        }
+                        .contentShape(Rectangle())
                     }
-                } label: {
-                    HStack(spacing: 6) {
-                        Text(project.name)
-                            .font(.title)
-                            .bold()
-                            .foregroundColor(.primary)
-                        Image(systemName: "chevron.down")
-                            .font(.title3)
+                    .buttonStyle(.plain)
+                    
+                    HStack(spacing: 8) {
+                        Button {
+                            editingProjectName = project.name
+                            showRenameAlert = true
+                        } label: {
+                            Image(systemName: "pencil.line")
+                                .foregroundColor(.accentColor)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Rename Project")
+                        
+                        Button {
+                            showDeleteProjectConfirmation = true
+                        } label: {
+                            Image(systemName: "trash")
+                                .foregroundColor(.red)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Delete Project")
+                    }
+                    
+                    Spacer()
+                    
+                    // VFX Indexing Controls (on same line)
+                    HStack(spacing: 8) {
+                        HStack(spacing: 4) {
+                            Text("Video Track")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: true, vertical: false)
+                            TextField("", text: $vfxTrack)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .frame(width: 40)
+                                .multilineTextAlignment(.center)
+                                .onChange(of: vfxTrack) { newValue in
+                                    let filtered = newValue.filter { "0123456789".contains($0) }
+                                    if filtered != newValue { vfxTrack = filtered }
+                                    if vfxTrack.count > 2 { vfxTrack = String(vfxTrack.prefix(2)) }
+                                }
+                        }
+                        
+                        Button(action: { runIndexing(project: project) }) {
+                            Label("Index VFX Clips", systemImage: "bolt.fill")
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.orange)
+                        .disabled(isIndexing || vfxTrack.isEmpty)
+                    }
+                }
+                .padding(.bottom, 2)
+                
+                // Row 2: Summary and Run Picker
+                HStack(spacing: 20) {
+                    if let run = getSelectedRun(project: project) {
+                        HStack(spacing: 12) {
+                            Label("\(countScenes(in: run)) Scenes", systemImage: "clapperboard")
+                            Label("\(run.clips.count) Clips", systemImage: "film")
+                        }
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    }
+                    
+                    if !project.runs.isEmpty {
+                        Picker("Run:", selection: $selectedRunId) {
+                            ForEach(project.runs.sorted(by: { $0.date > $1.date })) { run in
+                                Text("\(Formatter.date.string(from: run.date)) (\(run.clips.count) Clips)")
+                                    .tag(run.id as UUID?)
+                            }
+                        }
+                        .frame(width: 300)
+                        .controlSize(.small)
+                    } else {
+                        Text("No indexing runs yet.")
+                            .font(.caption)
                             .foregroundColor(.secondary)
                     }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                
-                // Summary
-                if let run = getSelectedRun(project: project) {
-                    HStack(spacing: 12) {
-                        Label("\(countScenes(in: run)) Scenes", systemImage: "clapperboard")
-                        Label("\(run.clips.count) Clips", systemImage: "film")
-                    }
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .padding(.bottom, 4)
-                }
-                
-                if !project.runs.isEmpty {
-                    Picker("Run:", selection: $selectedRunId) {
-                        ForEach(project.runs.sorted(by: { $0.date > $1.date })) { run in
-                            Text("\(Formatter.date.string(from: run.date)) (\(run.clips.count) Clips)")
-                                .tag(run.id as UUID?)
-                        }
-                    }
-                    .frame(width: 250)
-                } else {
-                    Text("No indexing runs yet.")
-                        .foregroundColor(.secondary)
                 }
             }
             
@@ -252,8 +339,8 @@ struct ProjectExportView: View {
         .background(Color(nsColor: .controlBackgroundColor))
         .fixedSize(horizontal: false, vertical: true)
         .overlay {
-            if isProcessing {
-                LoadingOverlay(message: "Generating Thumbnails...")
+            if isIndexing || isProcessing {
+                LoadingOverlay(message: loadingMessage.isEmpty ? (isIndexing ? "Indexing VFX Clips..." : "Generating Thumbnails...") : loadingMessage)
             }
         }
         .onAppear {
@@ -265,39 +352,105 @@ struct ProjectExportView: View {
 
     @ViewBuilder
     private func toolbarView(project: Project) -> some View {
-        HStack {
-            Toggle("Thumbnails", isOn: $showThumbnails)
-            Toggle("VFX Name", isOn: $showVfxName)
-            Toggle("TC In", isOn: $showTcIn)
-            Toggle("TC Out", isOn: $showTcOut)
-            Toggle("Source In", isOn: $showSourceTcIn)
-            Toggle("Source Out", isOn: $showSourceTcOut)
-            Toggle("Files", isOn: $showFileNames)
-            Toggle("Reel", isOn: $showReelName)
+        HStack(alignment: .bottom) {
+            // Left: Compact Column Toggles (2 Rows, Scrollable)
+            ScrollView(.horizontal, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 12) {
+                        Toggle("Thumbnails", isOn: $showThumbnails).controlSize(.small)
+                        Toggle("VFX Name", isOn: $showVfxName).controlSize(.small)
+                        Toggle("Duration", isOn: $showDuration).controlSize(.small)
+                        Toggle("Files", isOn: $showFileNames).controlSize(.small)
+                        Toggle("Reel", isOn: $showReelName).controlSize(.small)
+                    }
+                    HStack(spacing: 12) {
+                        Toggle("TC In", isOn: $showTcIn).controlSize(.small)
+                        Toggle("TC Out", isOn: $showTcOut).controlSize(.small)
+                        Toggle("Source In", isOn: $showSourceTcIn).controlSize(.small)
+                        Toggle("Source Out", isOn: $showSourceTcOut).controlSize(.small)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .frame(height: 50) // Valid height for 2 rows
             
             Spacer()
             
-            HStack(spacing: 0) {
-                Button {
-                    if let run = getSelectedRun(project: project) {
-                        generateThumbnails(project: project, run: run)
+            // Right: Actions
+            HStack(spacing: 16) {
+                // Thumbnail Generation (Strictly Horizontal)
+                HStack(spacing: 10) {
+                    Text("Source Track:")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    TextField("", text: $vfxThumbnailTrack)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .frame(width: 30)
+                        .multilineTextAlignment(.center)
+                        .controlSize(.small)
+                        .onChange(of: vfxThumbnailTrack) { newValue in
+                            let filtered = newValue.filter { "0123456789".contains($0) }
+                            if filtered != newValue { vfxThumbnailTrack = filtered }
+                            if vfxThumbnailTrack.count > 2 { vfxThumbnailTrack = String(vfxThumbnailTrack.prefix(2)) }
+                            
+                            // Persist
+                            if let project = projectManager.currentProject {
+                                projectManager.updateVfxThumbnailTrack(projectId: project.id, track: vfxThumbnailTrack)
+                            }
+                        }
+                    
+                    Button {
+                        if let run = getSelectedRun(project: project) {
+                            generateThumbnails(project: project, run: run)
+                        }
+                    } label: {
+                        Label("Create Thumbnails", systemImage: "photo.tv")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.regular)
+                    .disabled(selectedRunId == nil)
+                    .help("Generate Thumbnails from specified Track")
+                    
+                    Button {
+                         showDeleteThumbnailsAlert = true
+                    } label: {
+                         Image(systemName: "trash")
+                            .foregroundColor(.red)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Delete All Thumbnails")
+                }
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.2), lineWidth: 1))
+                
+                // Export Menu (Standard Size)
+                Menu {
+                    Button {
+                        if let run = getSelectedRun(project: project) {
+                            exportCSV(project: project, run: run)
+                        }
+                    } label: {
+                        Label("CSV Export", systemImage: "doc.text")
+                    }
+                    
+                    Button {
+                        if let run = getSelectedRun(project: project) {
+                            exportExcel(project: project, run: run)
+                        }
+                    } label: {
+                        Label("Excel Export (with Images)", systemImage: "doc.zipper")
                     }
                 } label: {
-                    Label("Create Thumbnails", systemImage: "photo.tv")
+                    Label("Export", systemImage: "square.and.arrow.up")
                 }
+                .menuStyle(.button)
+                .buttonStyle(.borderedProminent)
                 .disabled(selectedRunId == nil)
-                
-                Divider()
-                
-                Button {
-                     showDeleteThumbnailsAlert = true
-                } label: {
-                     Image(systemName: "trash")
-                        .foregroundColor(.red)
-                }
-                .help("Delete All Thumbnails for this Project")
+                .controlSize(.regular)
+                .fixedSize() // Prevent expansion
             }
-            .buttonStyle(.bordered)
             .alert("Delete Thumbnails?", isPresented: $showDeleteThumbnailsAlert) {
                 Button("Delete", role: .destructive) {
                     deleteThumbnails(project: project)
@@ -306,13 +459,6 @@ struct ProjectExportView: View {
             } message: {
                 Text("Are you sure you want to delete all thumbnails for this project?")
             }
-            
-            Button("Export CSV") {
-                if let run = getSelectedRun(project: project) {
-                    exportCSV(project: project, run: run)
-                }
-            }
-            .disabled(selectedRunId == nil)
         }
         .padding()
         .fixedSize(horizontal: false, vertical: true)
@@ -323,6 +469,7 @@ struct ProjectExportView: View {
         GridRow {
             if showThumbnails { Text("Thumb").bold() }
             if showVfxName { Text("VFX Name").bold() }
+            if showDuration { Text("Duration").bold() }
             if showTcIn { Text("TC In").bold() }
             if showTcOut { Text("TC Out").bold() }
             if showSourceTcIn { Text("Source In").bold() }
@@ -363,6 +510,9 @@ struct ProjectExportView: View {
                 if showVfxName {
                     if isEditing { TextField("", text: $clip.vfxName).textFieldStyle(.plain) }
                     else { Text(clip.vfxName).lineLimit(1).fixedSize() }
+                }
+                if showDuration {
+                    Text(String(clip.duration ?? 0))
                 }
                 if showTcIn {
                     if isEditing { TextField("", text: $clip.tcIn).textFieldStyle(.plain) }
@@ -506,13 +656,15 @@ struct ProjectExportView: View {
         }
         
         // 2. Prepare Payload
-        let targetTrack = Int(project.vfxTrackIndex ?? "1") ?? 1
+        // 2. Prepare Payload
+        let targetTrack = Int(self.vfxThumbnailTrack) ?? 1
         
         let clipsData = run.clips.map { clip -> [String: String] in
             return [
                 "name": clip.vfxName,
                 "tc": clip.tcIn,
-                "frame": String(clip.frameStart ?? 0)
+                "frameStart": String(clip.frameStart ?? 0),
+                "frameEnd": String(clip.frameEnd ?? 0)
             ]
         }
         
@@ -622,6 +774,129 @@ struct ProjectExportView: View {
         
         if panel.runModal() == .OK, let url = panel.url {
             try? csvContent.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+    
+    private func exportExcel(project: Project, run: IndexingRun) {
+        var headers: [String] = []
+        if showThumbnails { headers.append("Thumbnail") }
+        if showVfxName { headers.append("VFX-Name") }
+        if showTcIn { headers.append("Rec-TC-In") }
+        if showTcOut { headers.append("Rec-TC-Out") }
+        if showSourceTcIn { headers.append("Source-TC-In") }
+        if showSourceTcOut { headers.append("Source-TC-Out") }
+        if showReelName { headers.append("Reel-Name") }
+        if showFileNames { headers.append("File-Names") }
+        
+        let clipsData = run.clips.map { clip -> [String: String] in
+            var dict: [String: String] = [:]
+            if showThumbnails {
+                if let url = getThumbnailURL(project: project, run: run, clip: clip) {
+                    dict["thumbnail"] = url.path
+                } else {
+                    dict["thumbnail"] = ""
+                }
+            }
+            if showVfxName { dict["vfxName"] = clip.vfxName }
+            if showTcIn { dict["tcIn"] = clip.tcIn }
+            if showTcOut { dict["tcOut"] = clip.tcOut }
+            if showSourceTcIn { dict["sourceTcIn"] = clip.sourceTcIn }
+            if showSourceTcOut { dict["sourceTcOut"] = clip.sourceTcOut }
+            if showReelName { dict["reelName"] = clip.reelName }
+            if showFileNames { dict["fileNames"] = clip.fileNames }
+            return dict
+        }
+        
+        let panel = NSSavePanel()
+        panel.title = "Export Excel with Images"
+        panel.allowedContentTypes = [UTType(filenameExtension: "xlsx")].compactMap { $0 }
+        let dateStr = Formatter.filename.string(from: run.date)
+        panel.nameFieldStringValue = "\(project.name)_\(dateStr).xlsx"
+        
+        if panel.runModal() == .OK, let outputURL = panel.url {
+            let payload: [String: Any] = [
+                "headers": headers,
+                "clips": clipsData,
+                "outputPath": outputURL.path
+            ]
+            
+            do {
+                let jsonData = try JSONSerialization.data(withJSONObject: payload)
+                let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent("resolver_excel_export.json")
+                try jsonData.write(to: tmpURL)
+                
+                PyScriptRunner.run(scriptName: "Resolve/Tools/export_excel", args: [tmpURL.path], showOutput: false) { output in
+                    if let out = output { print("Excel Export Result: \(out)") }
+                }
+            } catch {
+                print("Excel Export Data Error: \(error)")
+            }
+        }
+    }
+    
+    private func runIndexing(project: Project) {
+        isIndexing = true
+        loadingMessage = "Connecting to Resolve..."
+        
+        // Save track choice
+        projectManager.updateVfxTrack(projectId: project.id, track: vfxTrack)
+        
+        PyScriptRunner.run(scriptName: "Resolve/VFX/clip-indexing", args: [vfxTrack], showOutput: false) { output in
+            DispatchQueue.main.async {
+                self.isIndexing = false
+                self.loadingMessage = ""
+                
+                guard let output = output else { return }
+                
+                var jsonString = output
+                if let start = output.firstIndex(of: "{"), let end = output.lastIndex(of: "}") {
+                    if start <= end { jsonString = String(output[start...end]) }
+                } else if let start = output.firstIndex(of: "["), let end = output.lastIndex(of: "]") {
+                     if start <= end { jsonString = String(output[start...end]) }
+                }
+                
+                print("🔍 Indexing Output (Track: \(self.vfxTrack)): \(jsonString)")
+                
+                guard let data = jsonString.data(using: .utf8) else { return }
+                
+                do {
+                    // Match the logic from DropDownMenu
+                    struct IncomingRunData: Decodable {
+                        let clips: [IncomingClipData]
+                        let sceneMarkers: [IncomingMarkerData]
+                        let warning: String?
+                    }
+                    struct IncomingClipData: Decodable {
+                        let vfxName, tcIn, tcOut, sourceTcIn, sourceTcOut, fileNames, reelName: String
+                        let frameStart, frameEnd, duration: Int?
+                    }
+                    struct IncomingMarkerData: Decodable {
+                        let frameId: Int
+                        let color, name, note: String
+                        let duration: Int
+                    }
+                    
+                    let runData = try JSONDecoder().decode(IncomingRunData.self, from: data)
+                    
+                    // Check for warnings
+                    if let warning = runData.warning, !warning.isEmpty {
+                        self.indexingWarningMessage = warning
+                        self.showIndexingWarning = true
+                    }
+                    
+                    let clips = runData.clips.map { raw in
+                        ClipData(vfxName: raw.vfxName, tcIn: raw.tcIn, tcOut: raw.tcOut, sourceTcIn: raw.sourceTcIn, sourceTcOut: raw.sourceTcOut, fileNames: raw.fileNames, reelName: raw.reelName, frameStart: raw.frameStart, frameEnd: raw.frameEnd, duration: raw.duration)
+                    }
+                    let markers = runData.sceneMarkers.map { raw in
+                        MarkerData(frameId: raw.frameId, color: raw.color, name: raw.name, note: raw.note, duration: raw.duration)
+                    }
+                    projectManager.addIndexingRun(to: project.id, clips: clips, sceneMarkers: markers)
+                } catch {
+                    print("Indexing Error: \(error)")
+                    self.indexingErrorMessage = "Failed to process indexing data: \(error.localizedDescription)"
+                    self.showIndexingError = true
+                }
+            }
         }
     }
 }

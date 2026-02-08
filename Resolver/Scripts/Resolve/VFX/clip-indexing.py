@@ -81,12 +81,17 @@ try:
     # === Input Argumente ===
     target_track_index = int(sys.argv[1]) if len(sys.argv) > 1 else 1
 
+    # === Analyze Timeline ===
+    timeline_name = timeline.GetName()
+    track_count = timeline.GetTrackCount("video")
+
     # === Clips auf Videospur analysieren ===
     videospur = timeline.GetItemListInTrack("video", target_track_index)
-    if not videospur:
-        # Kein Fehler, sondern leeres Ergebnis, wenn keine Clips gefunden werden
-        print(json.dumps([]))
-        sys.exit(0)
+    
+    # Initialize lists (don't exit early, so we can return debug info)
+    results = []
+    
+    # We continue logic even if videospur is empty, loop will just skip
 
     # === White Markers Sammeln ===
     markers = timeline.GetMarkers()
@@ -114,6 +119,17 @@ try:
 
     # Sortiere Marker nach Frame-ID aufsteigend
     white_markers.sort(key=lambda x: x['frame'])
+    
+    # === DEBUG: Collect raw marker info ===
+    raw_markers_debug = []
+    if markers:
+        for fid, mdata in list(markers.items())[:10]: # Limit to first 10 to avoid huge output
+             raw_markers_debug.append({
+                 "frame": fid,
+                 "color": mdata['color'],
+                 "note": mdata.get('note', ''),
+                 "name": mdata['name']
+             })
 
     # === Logik: Clips benennen ===
     results = []
@@ -134,70 +150,77 @@ try:
             
         if preceding_marker:
             marker_name = preceding_marker['name']
+        else:
+            marker_name = "NO_SCENE"
             
-            # Wenn wir einen neuen Marker-Bereich betreten, Counter resetten
-            if marker_name != current_marker_name:
-                current_marker_name = marker_name
-                vfx_counter = 10
-                
-            # Suffix bauen
-            suffix = str(vfx_counter).zfill(4)
-            vfx_final_name = f"{current_marker_name}_{suffix}"
+        # Wenn wir einen neuen Marker-Bereich betreten, Counter resetten
+        if marker_name != current_marker_name:
+            current_marker_name = marker_name
+            vfx_counter = 10
             
-            # Counter erhöhen
-            vfx_counter += 10
+        # Suffix bauen
+        suffix = str(vfx_counter).zfill(4)
+        
+        if current_marker_name == "NO_SCENE":
+             vfx_final_name = suffix
+        else:
+             vfx_final_name = f"{current_marker_name}_{suffix}"
+        
+        # Counter erhöhen
+        vfx_counter += 10
             
-            # Marker setzen
-            relative_start = clip_start - timeline_start_frame
-            relative_end = clip_end - timeline_start_frame
-            
-            timeline.AddMarker(relative_start, "Green", vfx_final_name, "Resolver-Vfx-Marker", 1)
-            timeline.AddMarker(relative_end - 1, "Red", vfx_final_name, "Resolver-Vfx-Marker", 1)
-            
-            # TC Berechnung
-            rec_tc_in = frames_to_tc(clip_start, frame_rate)
-            rec_tc_out = frames_to_tc(clip_end, frame_rate)
+        # Marker setzen
+        relative_start = clip_start - timeline_start_frame
+        relative_end = clip_end - timeline_start_frame
+        
+        timeline.AddMarker(relative_start, "Green", vfx_final_name, "Resolver-Vfx-Marker", 1)
+        timeline.AddMarker(relative_end - 1, "Red", vfx_final_name, "Resolver-Vfx-Marker", 1)
+        
+        # TC Berechnung
+        rec_tc_in = frames_to_tc(clip_start, frame_rate)
+        rec_tc_out = frames_to_tc(clip_end, frame_rate)
 
-            # Source Metadata
-            mp_item = clip.GetMediaPoolItem()
-            reel_name = ""
-            source_tc_in = ""
-            source_tc_out = ""
+        # Source Metadata
+        mp_item = clip.GetMediaPoolItem()
+        reel_name = ""
+        source_tc_in = ""
+        source_tc_out = ""
 
-            if mp_item:
-                reel_name = mp_item.GetClipProperty("Reel Name") or ""
-                file_start_tc = mp_item.GetClipProperty("Start TC")
-                
-                # If file_start_tc is empty, use "00:00:00:00" for calculation
-                if not file_start_tc:
-                    file_start_tc = "00:00:00:00"
+        if mp_item:
+            reel_name = mp_item.GetClipProperty("Reel Name") or ""
+            file_start_tc = mp_item.GetClipProperty("Start TC")
+            
+            # If file_start_tc is empty, use "00:00:00:00" for calculation
+            if not file_start_tc:
+                file_start_tc = "00:00:00:00"
 
-                start_frames_abs = tc_to_frames(file_start_tc, frame_rate)
-                # LeftOffset ist der Offset vom File-Start zum Clip-In
-                offset = clip.GetLeftOffset()
-                duration = clip.GetDuration()
-                
-                s_in = start_frames_abs + offset
-                s_out = s_in + duration
-                
-                source_tc_in = frames_to_tc(s_in, frame_rate)
-                source_tc_out = frames_to_tc(s_out, frame_rate)
+            start_frames_abs = tc_to_frames(file_start_tc, frame_rate)
+            # LeftOffset ist der Offset vom File-Start zum Clip-In
+            offset = clip.GetLeftOffset()
+            duration = clip.GetDuration()
+            
+            s_in = start_frames_abs + offset
+            s_out = s_in + duration
+            
+            source_tc_in = frames_to_tc(s_in, frame_rate)
+            source_tc_out = frames_to_tc(s_out, frame_rate)
             
             # Fallback für leere Source TCs
             if not source_tc_in: source_tc_in = "00:00:00:00"
             if not source_tc_out: source_tc_out = "00:00:00:00"
         
-            results.append({
-                "vfxName": str(vfx_final_name or ""),
-                "tcIn": str(rec_tc_in or ""),
-                "tcOut": str(rec_tc_out or ""),
-                "sourceTcIn": str(source_tc_in or ""),
-                "sourceTcOut": str(source_tc_out or ""),
-                "fileNames": str(clip.GetName() or ""),
-                "reelName": str(reel_name or ""),
-                "frameStart": int(clip_start),
-                "frameEnd": int(clip_end)
-            })
+        results.append({
+            "vfxName": str(vfx_final_name or ""),
+            "tcIn": str(rec_tc_in or ""),
+            "tcOut": str(rec_tc_out or ""),
+            "sourceTcIn": str(source_tc_in or ""),
+            "sourceTcOut": str(source_tc_out or ""),
+            "fileNames": str(clip.GetName() or ""),
+            "reelName": str(reel_name or ""),
+            "frameStart": int(clip_start),
+            "frameEnd": int(clip_end),
+            "duration": int(clip.GetDuration())
+        })
 
     # Prepare Scene Markers for Export
     scene_markers_output = []
@@ -210,10 +233,30 @@ try:
             "duration": 1
         })
 
+    # === DEBUG: Scan ALL tracks for items ===
+    track_distribution = {}
+    if track_count:
+        for i in range(1, int(track_count) + 1):
+             items = timeline.GetItemListInTrack("video", i)
+             count = len(items) if items else 0
+             track_distribution[f"Track_{i}"] = count
+
+    # Warning Message
+    warning_msg = ""
+    if not white_markers:
+        warning_msg = "No Scene Markers found. Clips have been indexed without scene contexts."
+
     # Output JSON Object
     final_output = {
         "clips": results,
-        "sceneMarkers": scene_markers_output
+        "sceneMarkers": scene_markers_output,
+        "warning": warning_msg,
+        "debug_track_received": target_track_index,
+        "debug_timeline_name": timeline_name,
+        "debug_track_count": track_count,
+        "debug_track_distribution": track_distribution,
+        "debug_raw_markers": raw_markers_debug,
+        "debug_white_markers_count": len(white_markers)
     }
 
     output_file = os.environ.get("RESOLVER_OUTPUT_FILE")
