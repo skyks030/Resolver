@@ -4,6 +4,7 @@ import sys
 import os
 import importlib.util
 import json
+import bisect
 
 # === Helper für Timecode ===
 def frames_to_tc(frames, fps):
@@ -80,6 +81,7 @@ try:
 
     # === Input Argumente ===
     target_track_index = int(sys.argv[1]) if len(sys.argv) > 1 else 1
+    output_file_path = os.environ.get("RESOLVER_OUTPUT_FILE")
 
     # === Analyze Timeline ===
     timeline_name = timeline.GetName()
@@ -87,11 +89,13 @@ try:
 
     # === Clips auf Videospur analysieren ===
     videospur = timeline.GetItemListInTrack("video", target_track_index)
-    
-    # Initialize lists (don't exit early, so we can return debug info)
-    results = []
-    
-    # We continue logic even if videospur is empty, loop will just skip
+    if not videospur:
+        videospur = []
+
+    # Sort clips by Start Frame to ensure sequential processing
+    # efficient marker lookup relies on sequential order or valid lookups
+    # Sorting is cheap for a few thousand items
+    videospur.sort(key=lambda x: x.GetStart())
 
     # === White Markers Sammeln ===
     markers = timeline.GetMarkers()
@@ -120,37 +124,38 @@ try:
     # Sortiere Marker nach Frame-ID aufsteigend
     white_markers.sort(key=lambda x: x['frame'])
     
-    # === DEBUG: Collect raw marker info ===
-    raw_markers_debug = []
-    if markers:
-        for fid, mdata in list(markers.items())[:10]: # Limit to first 10 to avoid huge output
-             raw_markers_debug.append({
-                 "frame": fid,
-                 "color": mdata['color'],
-                 "note": mdata.get('note', ''),
-                 "name": mdata['name']
-             })
+    # Prepare lookup list for bisect
+    marker_frames = [m['frame'] for m in white_markers]
+    
+    # === START STREAMING OUTPUT ===
+    # Open file (or stdout wrapper)
+    if output_file_path:
+        out_f = open(output_file_path, 'w', encoding='utf-8')
+    else:
+        out_f = sys.stdout
 
-    # === Logik: Clips benennen ===
-    results = []
+    # Write JSON Header
+    out_f.write('{\n  "clips": [\n')
+
+    # === Logik: Clips benennen & Streamen ===
     current_marker_name = None
     vfx_counter = 10 
-
-    for clip in videospur:
+    
+    clip_count = len(videospur)
+    
+    for i, clip in enumerate(videospur):
         clip_start = clip.GetStart()
         clip_end = clip.GetEnd()
         
-        # Finde den letzten weißen Marker, der VOR (oder am) Start des Clips liegt
-        preceding_marker = None
-        for m in white_markers:
-            if m['frame'] <= clip_start:
-                preceding_marker = m
-            else:
-                break
-            
-        if preceding_marker:
+        # Optimize: Use bisect to find preceding marker
+        # finding right insertion point gives index where all elements to left are <=
+        # actually bisect_right gives elements <= x if we look at idx-1
+        idx = bisect.bisect_right(marker_frames, clip_start)
+        if idx > 0:
+            preceding_marker = white_markers[idx - 1]
             marker_name = preceding_marker['name']
         else:
+            preceding_marker = None
             marker_name = "NO_SCENE"
             
         # Wenn wir einen neuen Marker-Bereich betreten, Counter resetten
@@ -209,7 +214,8 @@ try:
             if not source_tc_in: source_tc_in = "00:00:00:00"
             if not source_tc_out: source_tc_out = "00:00:00:00"
         
-        results.append({
+        # Build Clip Dict
+        clip_data = {
             "vfxName": str(vfx_final_name or ""),
             "tcIn": str(rec_tc_in or ""),
             "tcOut": str(rec_tc_out or ""),
@@ -220,9 +226,26 @@ try:
             "frameStart": int(clip_start),
             "frameEnd": int(clip_end),
             "duration": int(clip.GetDuration())
-        })
+        }
+        
+        # Stream Write
+        # Write INDENTED manually for readability or just dump
+        out_f.write("    ") # indent
+        json.dump(clip_data, out_f)
+        
+        # Add comma if not last element
+        if i < clip_count - 1:
+            out_f.write(",\n")
+        else:
+            out_f.write("\n")
+            
+        # Flush periodically (e.g. every 50 clips) to ensure disk write
+        if i % 50 == 0:
+            out_f.flush()
 
-    # Prepare Scene Markers for Export
+    # === Write Scene Markers & Footer ===
+    out_f.write('  ],\n') # Close clips array
+    
     scene_markers_output = []
     for m in white_markers:
         scene_markers_output.append({
@@ -233,7 +256,7 @@ try:
             "duration": 1
         })
 
-    # === DEBUG: Scan ALL tracks for items ===
+    # Prepare Debug & Footer Data
     track_distribution = {}
     if track_count:
         for i in range(1, int(track_count) + 1):
@@ -241,14 +264,21 @@ try:
              count = len(items) if items else 0
              track_distribution[f"Track_{i}"] = count
 
-    # Warning Message
+    raw_markers_debug = []
+    if markers:
+        for fid, mdata in list(markers.items())[:10]: 
+             raw_markers_debug.append({
+                 "frame": fid,
+                 "color": mdata['color'],
+                 "note": mdata.get('note', ''),
+                 "name": mdata['name']
+             })
+
     warning_msg = ""
     if not white_markers:
         warning_msg = "No Scene Markers found. Clips have been indexed without scene contexts."
 
-    # Output JSON Object
-    final_output = {
-        "clips": results,
+    footer_data = {
         "sceneMarkers": scene_markers_output,
         "warning": warning_msg,
         "debug_track_received": target_track_index,
@@ -259,18 +289,34 @@ try:
         "debug_white_markers_count": len(white_markers)
     }
 
-    output_file = os.environ.get("RESOLVER_OUTPUT_FILE")
-    if output_file:
-        with open(output_file, 'w') as f:
-            json.dump(final_output, f, indent=2)
-        # Optional: Print a small status message to stdout, which won't block
-        print(f"✅ Data written to {output_file}")
+    # Write Footer keys manually to merge into the main object
+    # We already wrote "clips": [ ... ],
+    # Now we write the rest of the keys
+    
+    # sceneMarkers
+    out_f.write('  "sceneMarkers": ')
+    json.dump(scene_markers_output, out_f, indent=2)
+    out_f.write(',\n')
+    
+    # warning
+    out_f.write('  "warning": ')
+    json.dump(warning_msg, out_f)
+    out_f.write(',\n')
+    
+    # Debug info
+    out_f.write('  "debug_timeline_name": ')
+    json.dump(timeline_name, out_f)
+    
+    # Close main object
+    out_f.write('\n}')
+    
+    # Cleanup
+    if output_file_path:
+        out_f.close()
+        print(f"✅ Data written to {output_file_path}")
     else:
-        print(json.dumps(final_output, indent=2))
-        sys.stdout.flush()
-
+        out_f.flush()
+        
 except Exception as e:
-    # Wir printen den Fehler nicht als JSON-Array (was Swift erwartet), 
-    # sondern als Text auf Stderr. Swift wird beim decode failen, aber das Output-Fenster zeigt den Stderr.
     sys.stderr.write(f"Fehler im Indexing-Script: {str(e)}")
     sys.exit(1)

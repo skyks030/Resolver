@@ -88,7 +88,10 @@ struct AboutSettingsView: View {
                 }
                 
                 Button("Check for Updates") {
-                    updateChecker.checkForUpdates()
+                    // UpdateChecker.runUpdateCheck(showOutput: true) // Static method shows Alert
+                    UpdateChecker.runUpdateCheck(showOutput: true)
+                    // Also refresh local state
+                    updateChecker.checkForUpdates() 
                 }
             }
             
