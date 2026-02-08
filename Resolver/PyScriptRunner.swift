@@ -2,7 +2,7 @@ import Foundation
 import AppKit
 
 class PyScriptRunner {
-    static func run(scriptName: String, args: [String] = [], showOutput: Bool = false, enableDownload: Bool = false, completion: ((String?) -> Void)? = nil) {
+    static func run(scriptName: String, args: [String] = [], showOutput: Bool = false, enableDownload: Bool = false, onProgress: ((String) -> Void)? = nil, completion: ((String?) -> Void)? = nil) {
 
         // Dev Mode: Check if local file exists
         let devScriptPath = "/Users/skymuller/Git/Resolver/Resolver/Scripts/\(scriptName).py"
@@ -96,6 +96,16 @@ class PyScriptRunner {
                         if !data.isEmpty {
                             fullOutput.append(data)
                             logHandle?.write(data)
+                            
+                            // Parse Progress
+                            if let str = String(data: data, encoding: .utf8) {
+                                let lines = str.components(separatedBy: .newlines)
+                                for line in lines where line.contains("PROGRESS:") {
+                                    DispatchQueue.main.async {
+                                        onProgress?(line)
+                                    }
+                                }
+                            }
                         }
                     }
                     

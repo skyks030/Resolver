@@ -115,7 +115,7 @@ struct MarkerToolView: View {
         errorMessage = nil
         
         // Path matches directory structure: Scripts/Resolve/Tools/list_markers.py
-        PyScriptRunner.run(scriptName: "Resolve/Tools/list_markers", showOutput: false, enableDownload: false) { output in
+        PyScriptRunner.run(scriptName: "Resolve/Tools/list_markers", showOutput: false, enableDownload: false, completion: { output in
             DispatchQueue.main.async {
                 isLoading = false
                 guard let jsonString = output, let data = jsonString.data(using: .utf8) else {
@@ -135,13 +135,13 @@ struct MarkerToolView: View {
                     self.errorMessage = "Failed to parse markers: \(error.localizedDescription)"
                 }
             }
-        }
+        })
     }
     
     private func deleteMarker(_ marker: TimelineMarker) {
         // Path matches directory structure: Scripts/Resolve/Tools/delete_marker.py
         // Args: FrameID, Color
-        PyScriptRunner.run(scriptName: "Resolve/Tools/delete_marker", args: [String(marker.frameId), marker.color], showOutput: false, enableDownload: false) { _ in
+        PyScriptRunner.run(scriptName: "Resolve/Tools/delete_marker", args: [String(marker.frameId), marker.color], showOutput: false, enableDownload: false, completion: { _ in
             // Refresh list after deletion logic (optimistic remove or refresh)
             DispatchQueue.main.async {
                 // Optimistic remove to feel snappier? Or safe refresh?
@@ -152,7 +152,7 @@ struct MarkerToolView: View {
                 }
                 // Optional: Trigger background refresh?
             }
-        }
+        })
     }
     
     private func colorForMarker(_ name: String) -> Color {

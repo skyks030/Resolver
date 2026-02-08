@@ -41,6 +41,9 @@ struct ProjectExportView: View {
     
     @State private var isIndexing = false
     @State private var loadingMessage = ""
+    @State private var indexingProgress: Double = 0.0
+    @State private var indexingTotal: Int = 0
+    @State private var indexingCurrent: Int = 0
     
     
     // Export Formats
@@ -358,7 +361,7 @@ struct ProjectExportView: View {
         .fixedSize(horizontal: false, vertical: true)
         .overlay {
             if isIndexing || isProcessing {
-                LoadingOverlay(message: loadingMessage.isEmpty ? (isIndexing ? "Indexing VFX Clips..." : "Generating Thumbnails...") : loadingMessage)
+                LoadingOverlay(message: loadingMessage.isEmpty ? (isIndexing ? "Indexing VFX Clips..." : "Generating Thumbnails...") : loadingMessage, progress: isIndexing ? indexingProgress : nil, current: isIndexing ? indexingCurrent : nil, total: isIndexing ? indexingTotal : nil)
             }
         }
         .onAppear {
@@ -641,9 +644,9 @@ struct ProjectExportView: View {
             try data.write(to: tmpURL)
             
             // Path matches Script directory
-            PyScriptRunner.run(scriptName: "Resolve/Tools/batch_marker_op", args: [tmpURL.path], showOutput: false, enableDownload: false) { output in
+            PyScriptRunner.run(scriptName: "Resolve/Tools/batch_marker_op", args: [tmpURL.path], showOutput: false, enableDownload: false, completion: { output in
                 if let out = output { print("Batch Op Result: \(out)") }
-            }
+            })
         } catch {
             print("Batch Op Error: \(error)")
         }
@@ -703,13 +706,13 @@ struct ProjectExportView: View {
             try data.write(to: tmpURL)
             
             // Run silently (showOutput: false) as requested.
-            PyScriptRunner.run(scriptName: "Resolve/VFX/generate-thumbnails", args: [tmpURL.path], showOutput: false) { _ in
+            PyScriptRunner.run(scriptName: "Resolve/VFX/generate-thumbnails", args: [tmpURL.path], showOutput: false, completion: { _ in
                 // Force UI update
                 DispatchQueue.main.async {
                     self.isProcessing = false
                     self.thumbnailRefreshID = UUID()
                 }
-            }
+            })
         } catch {
             print("Thumbnail Generation Error: \(error)")
             isProcessing = false
@@ -845,9 +848,9 @@ struct ProjectExportView: View {
                 let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent("resolver_excel_export.json")
                 try jsonData.write(to: tmpURL)
                 
-                PyScriptRunner.run(scriptName: "Resolve/Tools/export_excel", args: [tmpURL.path], showOutput: false) { output in
+                PyScriptRunner.run(scriptName: "Resolve/Tools/export_excel", args: [tmpURL.path], showOutput: false, completion: { output in
                     if let out = output { print("Excel Export Result: \(out)") }
-                }
+                })
             } catch {
                 print("Excel Export Data Error: \(error)")
             }
@@ -863,7 +866,22 @@ struct ProjectExportView: View {
         
         let endMarkerEnabled = project.vfxEndMarkerEnabled ?? false
         let endMarkerArg = endMarkerEnabled ? "true" : "false"
-        PyScriptRunner.run(scriptName: "Resolve/VFX/clip-indexing", args: [vfxTrack, endMarkerArg], showOutput: false) { output in
+        PyScriptRunner.run(scriptName: "Resolve/VFX/clip-indexing", args: [vfxTrack, endMarkerArg], showOutput: false, onProgress: { progressLine in
+            // Parse PROGRESS: 1/10
+            if let range = progressLine.range(of: "PROGRESS: ") {
+                let valueStr = String(progressLine[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                let parts = valueStr.components(separatedBy: "/")
+                if parts.count == 2, let current = Int(parts[0]), let total = Int(parts[1]) {
+                     DispatchQueue.main.async {
+                         self.indexingCurrent = current
+                         self.indexingTotal = total
+                         if total > 0 {
+                             self.indexingProgress = Double(current) / Double(total)
+                         }
+                     }
+                }
+            }
+        }) { output in
             DispatchQueue.main.async {
                 self.isIndexing = false
                 self.loadingMessage = ""

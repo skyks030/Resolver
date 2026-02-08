@@ -134,7 +134,7 @@ struct DoubleClipsView: View {
             let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent("resolver_scan_request.json")
             try data.write(to: tmpURL)
             
-            PyScriptRunner.run(scriptName: "Resolve/Tools/find_double_clips", args: [tmpURL.path], showOutput: false) { output in
+            PyScriptRunner.run(scriptName: "Resolve/Tools/find_double_clips", args: [tmpURL.path], showOutput: false, completion: { output in
                 DispatchQueue.main.async {
                     isScanning = false
                     
@@ -152,7 +152,7 @@ struct DoubleClipsView: View {
                         showErrorAlert = true
                     }
                 }
-            }
+            })
         } catch {
             isScanning = false
             statusMessage = "Failed to create payload."
@@ -187,7 +187,7 @@ struct DoubleClipsView: View {
             let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent("resolver_jump_request.json")
             try data.write(to: tmpURL)
             
-            PyScriptRunner.run(scriptName: "Resolve/Tools/navigate_to_frame", args: [tmpURL.path], showOutput: false) { output in
+            PyScriptRunner.run(scriptName: "Resolve/Tools/navigate_to_frame", args: [tmpURL.path], showOutput: false, completion: { output in
                 if let output = output, output.contains("\"error\":") {
                     DispatchQueue.main.async {
                         self.statusMessage = "Jump Failed"
@@ -195,7 +195,7 @@ struct DoubleClipsView: View {
                         self.showErrorAlert = true
                     }
                 }
-            }
+            })
         } catch {
              statusMessage = "Jump Request Failed"
              alertMessage = error.localizedDescription

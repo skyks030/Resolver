@@ -109,9 +109,9 @@ struct DropDownMenu: View {
             }
             
             MenuRow(title: "Add Scene Marker") {
-                PyScriptRunner.run(scriptName: "add-scene-marker", showOutput: false, enableDownload: false) { _ in
+                PyScriptRunner.run(scriptName: "add-scene-marker", showOutput: false, enableDownload: false, completion: { _ in
                     DispatchQueue.main.async { NSApplication.shared.hide(nil) }
-                }
+                })
             }
             
             Divider().padding(.vertical, 4)

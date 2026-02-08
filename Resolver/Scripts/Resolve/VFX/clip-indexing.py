@@ -150,6 +150,11 @@ try:
     clip_count = len(videospur)
     
     for i, clip in enumerate(videospur):
+        # Progress Update for UI
+        # Format: PROGRESS: <current>/<total>
+        print(f"PROGRESS: {i+1}/{clip_count}")
+        sys.stdout.flush() # Ensure immediate output
+
         clip_start = clip.GetStart()
         clip_end = clip.GetEnd()
         
