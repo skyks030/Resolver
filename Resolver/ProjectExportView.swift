@@ -36,10 +36,8 @@ struct ProjectExportView: View {
     @State private var showDuration = true
     
     // VFX Indexing State
-    @State private var vfxTrack = "1"
-    
-    // Thumbnail Track State
-    @State private var vfxThumbnailTrack = "1"
+    @State private var vfxTrack: String = "1"
+    @State private var vfxThumbnailTrack: String = "1"
     
     @State private var isIndexing = false
     @State private var loadingMessage = ""
@@ -291,23 +289,43 @@ struct ProjectExportView: View {
                 // Marker Operations
                 VStack(spacing: 8) {
                     // Row 1: Marker Operations
-                    HStack(spacing: 12) {
-                        Button { performBatchOp(type: "scene", action: "create", project: project) } label: {
-                             Label("Add Scenes", systemImage: "film")
+                    // Row 1: Marker Operations
+                    HStack(spacing: 16) {
+                        // Scene Group
+                        HStack(spacing: 0) {
+                            Button { performBatchOp(type: "scene", action: "create", project: project) } label: {
+                                Label("Add Scenes", systemImage: "film")
+                            }
+                            .help("Re-create Scene Markers in Timeline")
+                            
+                            Divider().frame(height: 16)
+                            
+                            Button { performBatchOp(type: "scene", action: "delete", project: project) } label: {
+                                Image(systemName: "trash")
+                                    .foregroundColor(.red)
+                            }
+                            .help("Delete Scene Markers")
                         }
-                        .help("Re-create Scene Markers in Timeline")
-
-                        Button { performBatchOp(type: "vfx", action: "create", project: project) } label: {
-                            Label("Add VFX", systemImage: "wand.and.stars")
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        
+                        // VFX Group
+                        HStack(spacing: 0) {
+                            Button { performBatchOp(type: "vfx", action: "create", project: project) } label: {
+                                Label("Add VFX", systemImage: "wand.and.stars")
+                            }
+                            .help("Create VFX Markers depending on Indexing Run")
+                            
+                            Divider().frame(height: 16)
+                            
+                            Button { performBatchOp(type: "vfx", action: "delete", project: project) } label: {
+                                Image(systemName: "trash")
+                                    .foregroundColor(.red)
+                            }
+                            .help("Delete VFX Markers")
                         }
-                        .help("Create VFX Markers depending on Indexing Run")
-
-                        Button {
-                            PyScriptRunner.run(scriptName: "Resolve/Tools/clean_all_resolver_markers", showOutput: false)
-                        } label: {
-                            Label("Clean All", systemImage: "trash")
-                        }
-                        .help("Delete ALL Resolver Markers (Scene & VFX) from the Timeline")
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -596,8 +614,10 @@ struct ProjectExportView: View {
                 // Green Start
                 markers.append(MarkerData(frameId: start, color: "Green", name: clip.vfxName, note: "Resolver-Vfx-Marker", duration: 1))
                 
-                // Red End
-                markers.append(MarkerData(frameId: end - 1, color: "Red", name: clip.vfxName, note: "Resolver-Vfx-Marker", duration: 1))
+                // Red End (Only if enabled)
+                if project.vfxEndMarkerEnabled == true {
+                    markers.append(MarkerData(frameId: end - 1, color: "Red", name: clip.vfxName, note: "Resolver-Vfx-Marker", duration: 1))
+                }
             }
             
             // Warn if clips exist but no frames
@@ -841,7 +861,9 @@ struct ProjectExportView: View {
         // Save track choice
         projectManager.updateVfxTrack(projectId: project.id, track: vfxTrack)
         
-        PyScriptRunner.run(scriptName: "Resolve/VFX/clip-indexing", args: [vfxTrack], showOutput: false) { output in
+        let endMarkerEnabled = project.vfxEndMarkerEnabled ?? false
+        let endMarkerArg = endMarkerEnabled ? "true" : "false"
+        PyScriptRunner.run(scriptName: "Resolve/VFX/clip-indexing", args: [vfxTrack, endMarkerArg], showOutput: false) { output in
             DispatchQueue.main.async {
                 self.isIndexing = false
                 self.loadingMessage = ""

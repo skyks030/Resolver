@@ -45,6 +45,7 @@ struct Project: Codable, Identifiable {
     var runs: [IndexingRun] = []
     var vfxTrackIndex: String? = nil
     var vfxThumbnailTrackIndex: String? = nil
+    var vfxEndMarkerEnabled: Bool? = false // Default OFF
 }
 
 struct ProjectStore: Codable {
@@ -156,6 +157,16 @@ class ProjectManager: ObservableObject {
     func updateVfxThumbnailTrack(projectId: UUID, track: String) {
         guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
         projects[index].vfxThumbnailTrackIndex = track
+        
+        if currentProject?.id == projectId {
+            currentProject = projects[index]
+        }
+        save()
+    }
+    
+    func updateVfxEndMarkerEnabled(projectId: UUID, enabled: Bool) {
+        guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[index].vfxEndMarkerEnabled = enabled
         
         if currentProject?.id == projectId {
             currentProject = projects[index]

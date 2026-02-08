@@ -8,6 +8,9 @@ struct SettingsView: View {
     // Update Checker
     @StateObject private var updateChecker = UpdateChecker()
     
+    // Project Access
+    @EnvironmentObject var projectManager: ProjectManager
+    
     var body: some View {
         TabView {
             GeneralSettingsView(format: $thumbnailFormat, height: $thumbnailHeight)
@@ -15,12 +18,17 @@ struct SettingsView: View {
                     Label("General", systemImage: "gear")
                 }
             
+            VFXSettingsView()
+                .tabItem {
+                    Label("VFX", systemImage: "wand.and.stars")
+                }
+            
             AboutSettingsView(updateChecker: updateChecker)
                 .tabItem {
                     Label("About", systemImage: "info.circle")
                 }
         }
-        .frame(width: 450, height: 250)
+        .frame(width: 450, height: 300)
     }
 }
 
@@ -46,6 +54,38 @@ struct GeneralSettingsView: View {
                 Text("Thumbnails will be resized to fit this height while maintaining aspect ratio.")
                     .font(.caption)
                     .foregroundColor(.secondary)
+            }
+        }
+        .padding()
+    }
+}
+
+
+struct VFXSettingsView: View {
+    @EnvironmentObject var projectManager: ProjectManager
+    
+    // Local state for the toggle, sync with project
+    @State private var vfxEndMarker: Bool = false
+    
+    var body: some View {
+        Form {
+            Section(header: Text("VFX Markers")) {
+                if let project = projectManager.currentProject {
+                    Toggle("Create End Marker (Red)", isOn: $vfxEndMarker)
+                        .onChange(of: vfxEndMarker) { newValue in
+                            projectManager.updateVfxEndMarkerEnabled(projectId: project.id, enabled: newValue)
+                        }
+                        .onAppear {
+                            vfxEndMarker = project.vfxEndMarkerEnabled ?? false
+                        }
+                    
+                    Text("If enabled, a Red marker will be created at the end of each VFX clip.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("Please open a project to configure VFX settings.")
+                        .foregroundColor(.secondary)
+                }
             }
         }
         .padding()

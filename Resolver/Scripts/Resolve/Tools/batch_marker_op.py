@@ -54,17 +54,28 @@ try:
         raise Exception("No active timeline")
 
     start_frame = int(timeline.GetStartFrame())
+    print(json.dumps({"status": "debug", "message": f"Timeline Start Frame: {start_frame}"}))
     
     count = 0
+    failed_count = 0
     
     if action == "delete":
+        # DeleteMarkerAtFrame expects Absolute Frame and Color
+        
         for m in markers:
-            # DeleteMarkerAtFrame expects Absolute Frame and Color
-            frame = int(m.get("frameId", 0))
+            frame_abs = int(m.get("frameId", 0))
             color = m.get("color", "Cream")
-            # Resolve API: DeleteMarkerAtFrame(frame, color) -> Bool
-            if timeline.DeleteMarkerAtFrame(frame, color):
+            
+            # Try to delete (Absolute)
+            if timeline.DeleteMarkerAtFrame(frame_abs, color):
                 count += 1
+            else:
+                # Retry with offset (Relative to Start)
+                frame_offset = frame_abs - start_frame
+                if timeline.DeleteMarkerAtFrame(frame_offset, color):
+                    count += 1
+                else:
+                    failed_count += 1
                 
     elif action == "create":
         for m in markers:
@@ -77,11 +88,18 @@ try:
             # AddMarker expects OFFSET from Start Frame
             frame_offset = frame_abs - start_frame
             
-            # AddMarker(frameOffset, color, name, note, duration, customData)
-            timeline.AddMarker(frame_offset, color, name, note, duration)
-            count += 1
+            if timeline.AddMarker(frame_offset, color, name, note, duration):
+                count += 1
+            else:
+                failed_count += 1
 
-    print(json.dumps({"status": "success", "count": count, "action": action}))
+    print(json.dumps({
+        "status": "success", 
+        "count": count, 
+        "failed": failed_count,
+        "action": action,
+        "total_attempted": len(markers)
+    }))
 
 except Exception as e:
     print(json.dumps({"error": f"Script Error: {str(e)}"}))

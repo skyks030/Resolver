@@ -26,6 +26,7 @@ struct ResolverApp: App {
 
         Settings {
             SettingsView()
+                .environmentObject(projectManager)
         }
         
         Window("Double Clip Finder", id: "double-clips") {

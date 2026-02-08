@@ -82,6 +82,11 @@ try:
     # === Input Argumente ===
     target_track_index = int(sys.argv[1]) if len(sys.argv) > 1 else 1
     output_file_path = os.environ.get("RESOLVER_OUTPUT_FILE")
+    
+    # Check for end marker flag (default: False)
+    vfx_end_marker_enabled = False
+    if len(sys.argv) > 2:
+        vfx_end_marker_enabled = sys.argv[2].lower() == "true"
 
     # === Analyze Timeline ===
     timeline_name = timeline.GetName()
@@ -113,6 +118,7 @@ try:
                 # If frame_id is very small (relative to start), add start_frame
                 marker_abs = frame_id
                 if frame_id < timeline_start_frame:
+                    print(json.dumps({"status": "debug", "message": f"Fixing Relative Marker {frame_id} -> {frame_id + timeline_start_frame}"}))
                     marker_abs = frame_id + timeline_start_frame
                     
                 white_markers.append({
@@ -179,7 +185,9 @@ try:
         relative_end = clip_end - timeline_start_frame
         
         timeline.AddMarker(relative_start, "Green", vfx_final_name, "Resolver-Vfx-Marker", 1)
-        timeline.AddMarker(relative_end - 1, "Red", vfx_final_name, "Resolver-Vfx-Marker", 1)
+        
+        if vfx_end_marker_enabled:
+            timeline.AddMarker(relative_end - 1, "Red", vfx_final_name, "Resolver-Vfx-Marker", 1)
         
         # TC Berechnung
         rec_tc_in = frames_to_tc(clip_start, frame_rate)
