@@ -270,22 +270,26 @@ try:
         })
 
     # Prepare Debug & Footer Data
-    track_distribution = {}
-    if track_count:
-        for i in range(1, int(track_count) + 1):
-             items = timeline.GetItemListInTrack("video", i)
-             count = len(items) if items else 0
-             track_distribution[f"Track_{i}"] = count
+    # === Finalizing ===
+    print(f"PROGRESS: Finalizing/...")
+    sys.stdout.flush()
 
+    # Prepare Debug & Footer Data
+    # track_distribution removed for performance on large timelines
+    
     raw_markers_debug = []
     if markers:
-        for fid, mdata in list(markers.items())[:10]: 
-             raw_markers_debug.append({
-                 "frame": fid,
-                 "color": mdata['color'],
-                 "note": mdata.get('note', ''),
-                 "name": mdata['name']
-             })
+        # Limit debug markers to 10
+        count = 0
+        for frame_id, marker_data in markers.items():
+            if count >= 10: break
+            raw_markers_debug.append({
+                "frame": frame_id,
+                "color": marker_data['color'],
+                "note": marker_data.get('note', ''),
+                "name": marker_data['name']
+            })
+            count += 1
 
     warning_msg = ""
     if not white_markers:
@@ -297,7 +301,7 @@ try:
         "debug_track_received": target_track_index,
         "debug_timeline_name": timeline_name,
         "debug_track_count": track_count,
-        "debug_track_distribution": track_distribution,
+        # "debug_track_distribution": track_distribution, # REMOVED
         "debug_raw_markers": raw_markers_debug,
         "debug_white_markers_count": len(white_markers)
     }
