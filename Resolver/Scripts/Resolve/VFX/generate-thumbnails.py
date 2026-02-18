@@ -250,16 +250,27 @@ try:
                     if not albums_to_try and target_album:
                         albums_to_try.append(target_album)
                         
+                    # Debug: Print Albums we are trying
+                    album_names = [a.GetLabel() for a in albums_to_try]
+                    # print(json.dumps({"status": "debug", "message": f"Attempting export from albums: {album_names}"}))
+                    
                     # Try Export
                     for album in albums_to_try:
+                        # Validate output dir access
+                        if not os.access(output_dir, os.W_OK):
+                             print(json.dumps({"status": "error", "message": f"Output dir not writable: {output_dir}"}))
+                        
                         if album.ExportStills([still], output_dir, temp_export_name, export_format):
                             success = True
                             export_album = album
-                            # print(f"Debug: Exported from {album.GetLabel()}")
                             break
+                        else:
+                            # Detailed failure log
+                            # print(json.dumps({"status": "debug", "message": f"Export failed for album '{album.GetLabel()}' to '{output_dir}/{temp_export_name}.{export_format}'"}))
+                            pass
                     
                     if not success:
-                        print(json.dumps({"status": "warning", "message": f"ExportStills failed from ALL {len(albums_to_try)} albums for {name}"}))
+                        print(json.dumps({"status": "warning", "message": f"ExportStills failed from ALL {len(albums_to_try)} albums for {name}. Albums: {album_names} Dir: {output_dir}"}))
                     else:
                         # Cleanup
                         export_album.DeleteStills([still])
