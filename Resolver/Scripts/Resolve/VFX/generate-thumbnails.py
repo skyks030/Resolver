@@ -175,8 +175,10 @@ try:
             target_album = albums[0]
     
         if not target_album:
-             print(json.dumps({"status": "error", "message": "No valid Still Album found (and list is empty). Please create a 'Stills' album in Color Page."}))
-             # Let it continue to fail gracefully loop by loop? No, better warn.
+            err_msg = "No valid Still Album found (and list is empty). Please create a 'Stills' album in Color Page."
+            print(json.dumps({"status": "error", "message": err_msg}))
+            raise Exception(err_msg) # Abort immediately
+            # Let it continue to fail gracefully loop by loop? No, better warn.
              
      
         # === Main Loop ===
@@ -279,9 +281,21 @@ try:
                              pass
                     
                     if not success:
-                        print(json.dumps({"status": "warning", "message": f"ExportStills failed from ALL {len(albums_to_try)} albums for {name}. Albums: {album_names} Dir: {output_dir}"}))
+                        # FATAL ERROR - Abort Script
+                        err_msg = f"FATAL: ExportStills failed from ALL {len(albums_to_try)} albums for {name}. Albums: {album_names} Dir: {output_dir}"
+                        print(json.dumps({"status": "error", "message": err_msg}))
+                        
+                        # Try to cleanup the still so it doesn't pile up
+                        try:
+                            # We don't know which album it's in, but we can try to delete from 'current' or 'target'
+                            if current: current.DeleteStills([still])
+                            elif target_album: target_album.DeleteStills([still])
+                        except:
+                            pass
+                            
+                        raise Exception(err_msg) # Abort processing
                     else:
-                        # Cleanup
+                        # Cleanup success
                         export_album.DeleteStills([still])
                     
                     # 3. Snapshot files after
