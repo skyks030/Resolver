@@ -154,7 +154,15 @@ try:
             target_album = albums[0]
 
         if target_album:
-             print(json.dumps({"status": "debug", "message": f"Using album: {target_album.GetLabel() if target_album.GetLabel() else 'Nameless'}"}))
+             lbl = target_album.GetLabel()
+             if not lbl:
+                 print(json.dumps({"status": "warning", "message": "Album is nameless. Renaming to 'Resolver_Stills'."}))
+                 if target_album.SetLabel("Resolver_Stills"):
+                     lbl = "Resolver_Stills"
+                 else:
+                     print(json.dumps({"status": "error", "message": "Failed to rename nameless album."}))
+             
+             print(json.dumps({"status": "debug", "message": f"Using album: {lbl}"}))
              gallery.SetCurrentStillAlbum(target_album)
     
         if not target_album:
