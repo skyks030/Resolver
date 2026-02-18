@@ -56,6 +56,7 @@ class PyScriptRunner {
         task.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         var arguments = [scriptURL.path]
         arguments.append(contentsOf: args)
+        print("🚀 PyScriptRunner Executing: python3 \(arguments.joined(separator: " "))")
         task.arguments = arguments
         
         // Environment for File-Based Output (to avoid Pipe Deadlocks)

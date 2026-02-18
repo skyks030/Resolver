@@ -266,7 +266,52 @@ struct ProjectExportView: View {
             if selectedRunId != nil {
                 Button(isEditing ? "Save Changes" : "Edit Mode") {
                     if isEditing {
-                        projectManager.save()
+                        // SAVE CHANGES
+                        if let project = projectManager.currentProject, let runId = selectedRunId {
+                            // Find changes
+                            var updates: [String: String] = [:]
+                            
+                            // CRITICAL FIX: Read from `projectManager.projects` because `currentProject` 
+                            // is a struct and hasn't received the Binding updates from the TextFields yet.
+                            if let pIndex = projectManager.projects.firstIndex(where: { $0.id == project.id }),
+                               let run = projectManager.projects[pIndex].runs.first(where: { $0.id == runId }) {
+                                
+                                for clip in run.clips {
+                                    if let original = clip.originalVfxName, clip.vfxName != original {
+                                        updates[original] = clip.vfxName
+                                    }
+                                }
+                            }
+                            
+                            if !updates.isEmpty {
+                                projectManager.updateVfxRenamingMap(projectId: project.id, updates: updates)
+                            } else {
+                                projectManager.save() 
+                            }
+                        }
+                    } else {
+                        // ENTER EDIT MODE
+                        // Backfill originalVfxName if missing
+                        if let project = projectManager.currentProject, let runId = selectedRunId,
+                           let pIndex = projectManager.projects.firstIndex(where: { $0.id == project.id }),
+                           let rIndex = projectManager.projects[pIndex].runs.firstIndex(where: { $0.id == runId }) {
+                            
+                            var run = projectManager.projects[pIndex].runs[rIndex]
+                            var changed = false
+                            for i in 0..<run.clips.count {
+                                if run.clips[i].originalVfxName == nil {
+                                    run.clips[i].originalVfxName = run.clips[i].vfxName
+                                    changed = true
+                                }
+                            }
+                            if changed {
+                                projectManager.projects[pIndex].runs[rIndex] = run
+                                // Do not save yet, just update state for editing
+                                if projectManager.currentProject?.id == project.id {
+                                    projectManager.currentProject = projectManager.projects[pIndex]
+                                }
+                            }
+                        }
                     }
                     isEditing.toggle()
                 }
@@ -338,7 +383,38 @@ struct ProjectExportView: View {
                         Button {
                             // Default to Track 1 if not set, but ideally user sets it in menu
                             let track = project.vfxTrackIndex?.isEmpty == false ? project.vfxTrackIndex! : "1"
-                            PyScriptRunner.run(scriptName: "Resolve/VFX/clip-grouping", args: [track], showOutput: true)
+                            
+                            // Serialize Clip Data for Script
+                            // We need to pass the *latest* data, so we fetch from manager
+                            if let pIndex = projectManager.projects.firstIndex(where: { $0.id == project.id }),
+                               let run = getSelectedRun(project: projectManager.projects[pIndex]) {
+                                
+                                struct ClipPayload: Codable {
+                                    let vfxName: String
+                                    let frameStart: Int
+                                    let frameEnd: Int
+                                }
+                                
+                                let clipsPayload = run.clips.compactMap { clip -> ClipPayload? in
+                                    guard let start = clip.frameStart, let end = clip.frameEnd else { return nil }
+                                    return ClipPayload(vfxName: clip.vfxName, frameStart: start, frameEnd: end)
+                                }
+                                
+                                do {
+                                    let data = try JSONEncoder().encode(clipsPayload)
+                                    let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent("resolver_grouping_clips.json")
+                                    try data.write(to: tmpURL)
+                                    
+                                    print("🚀 Calling clip-grouping with Track: \(track), JSON: \(tmpURL.path)")
+                                    
+                                    PyScriptRunner.run(scriptName: "Resolve/VFX/clip-grouping", args: [track, tmpURL.path], showOutput: true)
+                                } catch {
+                                    print("Failed to encode clips for grouping: \(error)")
+                                }
+                            } else {
+                                // Fallback if no run selected
+                                PyScriptRunner.run(scriptName: "Resolve/VFX/clip-grouping", args: [track], showOutput: true)
+                            }
                         } label: {
                             Label("Show Color Groups", systemImage: "paintpalette")
                         }
@@ -604,7 +680,11 @@ struct ProjectExportView: View {
     }
     
     private func performBatchOp(type: String, action: String, project: Project) {
-        guard let run = getSelectedRun(project: project) else { return }
+        // Fetch FRESH project data to ensure we use renamed clips
+        guard let pIndex = projectManager.projects.firstIndex(where: { $0.id == project.id }) else { return }
+        let freshProject = projectManager.projects[pIndex]
+        
+        guard let run = getSelectedRun(project: freshProject) else { return }
         
         var markers: [MarkerData] = []
         
@@ -661,6 +741,21 @@ struct ProjectExportView: View {
         // Start Loading
         isProcessing = true
         
+        // 0. Fetch FRESH Data
+        // The passed 'project' and 'run' might be stale copies from the View.
+        // We must reach into projectManager to get the source of truth.
+        guard let pIndex = projectManager.projects.firstIndex(where: { $0.id == project.id }),
+              let rIndex = projectManager.projects[pIndex].runs.firstIndex(where: { $0.id == run.id }) else {
+            print("❌ Could not find fresh project/run data for thumbnails.")
+            isProcessing = false
+            return
+        }
+        
+        let freshProject = projectManager.projects[pIndex]
+        let freshRun = freshProject.runs[rIndex]
+        
+        print("📸 Generating Thumbnails for \(freshRun.clips.count) clips (View had: \(run.clips.count)) from Track: \(self.vfxThumbnailTrack)")
+        
         // 1. Setup Directories
         let fileManager = FileManager.default
         guard let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
@@ -673,7 +768,7 @@ struct ProjectExportView: View {
         let thumbnailsDir = appSupport
             .appendingPathComponent("com.skyks030.Resolver")
             .appendingPathComponent("Thumbnails")
-            .appendingPathComponent(project.id.uuidString)
+            .appendingPathComponent(freshProject.id.uuidString)
             
         do {
             try fileManager.createDirectory(at: thumbnailsDir, withIntermediateDirectories: true)
@@ -684,10 +779,9 @@ struct ProjectExportView: View {
         }
         
         // 2. Prepare Payload
-        // 2. Prepare Payload
         let targetTrack = Int(self.vfxThumbnailTrack) ?? 1
         
-        let clipsData = run.clips.map { clip -> [String: String] in
+        let clipsData = freshRun.clips.map { clip -> [String: String] in
             return [
                 "name": clip.vfxName,
                 "tc": clip.tcIn,
@@ -894,7 +988,27 @@ struct ProjectExportView: View {
         
         let endMarkerEnabled = project.vfxEndMarkerEnabled ?? false
         let endMarkerArg = endMarkerEnabled ? "true" : "false"
-        PyScriptRunner.run(scriptName: "Resolve/VFX/clip-indexing", args: [vfxTrack, endMarkerArg], showOutput: false, onProgress: { progressLine in
+        
+        // Prepare Renaming Map
+        var renamingMapArg = ""
+        if let map = project.vfxRenamingMap, !map.isEmpty {
+            do {
+                let data = try JSONEncoder().encode(map)
+                let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent("resolver_renaming_map.json")
+                try data.write(to: tmpURL)
+                renamingMapArg = tmpURL.path
+            } catch {
+                print("Failed to encode renaming map: \(error)")
+            }
+        }
+        
+        // Args: [track, endMarkerEnabled, renamingMapJSON]
+        var args = [vfxTrack, endMarkerArg]
+        if !renamingMapArg.isEmpty {
+            args.append(renamingMapArg)
+        }
+
+        PyScriptRunner.run(scriptName: "Resolve/VFX/clip-indexing", args: args, showOutput: false, onProgress: { progressLine in
             // Parse PROGRESS: 1/10
             if let range = progressLine.range(of: "PROGRESS: ") {
                 let valueStr = String(progressLine[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)

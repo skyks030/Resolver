@@ -15,6 +15,7 @@ struct ClipData: Codable, Identifiable {
     var frameStart: Int?
     var frameEnd: Int?
     var duration: Int?
+    var originalVfxName: String?
 }
 
 struct MarkerData: Codable, Identifiable {
@@ -46,6 +47,7 @@ struct Project: Codable, Identifiable {
     var vfxTrackIndex: String? = nil
     var vfxThumbnailTrackIndex: String? = nil
     var vfxEndMarkerEnabled: Bool? = false // Default OFF
+    var vfxRenamingMap: [String: String]? = [:] // Map Original Name -> New Name
 }
 
 struct ProjectStore: Codable {
@@ -120,7 +122,23 @@ class ProjectManager: ObservableObject {
     func addIndexingRun(to projectId: UUID, clips: [ClipData], sceneMarkers: [MarkerData] = []) {
         guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
         
-        var run = IndexingRun(clips: clips)
+        // Process Clips: Apply Renaming Map
+        var processedClips = clips
+        let renamingMap = projects[index].vfxRenamingMap ?? [:]
+        
+        for i in 0..<processedClips.count {
+            // Ensure original name is set
+            if processedClips[i].originalVfxName == nil {
+                processedClips[i].originalVfxName = processedClips[i].vfxName
+            }
+            
+            // Check if we have a rename rule for this original name
+            if let original = processedClips[i].originalVfxName, let newName = renamingMap[original] {
+                processedClips[i].vfxName = newName
+            }
+        }
+        
+        var run = IndexingRun(clips: processedClips)
         run.sceneMarkers = sceneMarkers
         
         projects[index].runs.append(run)
@@ -140,6 +158,49 @@ class ProjectManager: ObservableObject {
         
         if currentProject?.id == projectId {
             currentProject = projects[pIndex]
+        }
+        save()
+    }
+    
+    func updateVfxRenamingMap(projectId: UUID, updates: [String: String]) {
+        guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        
+        // Initialize if nil
+        if projects[index].vfxRenamingMap == nil {
+            projects[index].vfxRenamingMap = [:]
+        }
+        
+        // Update Map
+        for (originalName, newName) in updates {
+            projects[index].vfxRenamingMap?[originalName] = newName
+        }
+        
+        // Apply to ALL runs in the project to ensure consistency
+        for rIndex in 0..<projects[index].runs.count {
+            for cIndex in 0..<projects[index].runs[rIndex].clips.count {
+                var clip = projects[index].runs[rIndex].clips[cIndex]
+                
+                // Backfill original name if missing (assume current is original if not set, 
+                // but if we are renaming, we likely want to be careful. 
+                // For existing clips, if original is nil, we assume vfxName IS the original 
+                // UNLESS we just matched it. But to be safe, we only rename if we have an original name.)
+                if clip.originalVfxName == nil {
+                     // If we are applying a rename, we must assume the CURRENT name is the original 
+                     // if it matches the key, OR we assume it was never renamed.
+                     // A safer bet for legacy data: set original = current
+                     clip.originalVfxName = clip.vfxName
+                }
+                
+                if let original = clip.originalVfxName, let newName = projects[index].vfxRenamingMap?[original] {
+                    clip.vfxName = newName
+                }
+                
+                projects[index].runs[rIndex].clips[cIndex] = clip
+            }
+        }
+        
+        if currentProject?.id == projectId {
+            currentProject = projects[index]
         }
         save()
     }

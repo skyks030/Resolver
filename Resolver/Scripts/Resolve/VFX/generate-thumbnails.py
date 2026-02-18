@@ -137,29 +137,30 @@ try:
     # BUT we must be careful not to delete user stills.
     
     print(json.dumps({"status": "debug", "message": "Getting Current Still Album..."}))
-    current_album = gallery.GetCurrentStillAlbum()
-    if not current_album:
-         print(json.dumps({"status": "debug", "message": "GetCurrentStillAlbum returned None. Using fallback logic?"}))
-         # If current album is None, we might not be able to proceed unless we find one.
-         
-    target_album = current_album # Default fallback
     
-    # Try to find "resolver_temp_stills" in existing albums
-    found_album = False
+    # === Album Management ===
+    # 1. Try to find "resolver_temp_stills"
     albums = gallery.GetGalleryStillAlbums()
+    target_album = None
     
     if albums:
         for album in albums:
             if album.GetLabel() == "resolver_temp_stills":
                 gallery.SetCurrentStillAlbum(album)
                 target_album = album
-                found_album = True
                 break
     
-    # Logic for creation is missing in standard API (Verify??)
-    # If not found, we use current but warn? 
-    # User Request: "Dieser Stills-Ordner soll heißen: 'resolver_temp_stills'"
-    # If we can't create, we might have to just use the current one and be careful.
+    # 2. If not found, use Current (and print it)
+    if not target_album:
+         current = gallery.GetCurrentStillAlbum()
+         if current:
+             target_album = current
+             # print(json.dumps({"status": "debug", "message": f"Using existing album: {current.GetLabel()}"}))
+         else:
+             print(json.dumps({"status": "error", "message": "No Current Still Album found."}))
+             sys.exit(1)
+         
+
     
 
 
@@ -190,6 +191,7 @@ try:
                 if target_tc:
                      # print(json.dumps({"status": "debug", "message": f"Setting TC: {target_tc}"}))
                      timeline.SetCurrentTimecode(target_tc)
+                     time.sleep(0.2) # Allow Resolve to seek
                 
                 # Grab Still
                 # print(json.dumps({"status": "debug", "message": "Grabbing Still..."}))
@@ -213,43 +215,97 @@ try:
                     # Clean up existing files for this clip name to prevent duplicates/stale files
                     # Resolve might export as name.jpg, name.1.1.1.jpg etc.
                     # We want to remove anything starting with 'name' and ending with our format
-                    try:
-                        existing_files = [f for f in os.listdir(output_dir) if f.startswith(name) and f.lower().endswith(f".{export_format}")]
-                        for ef in existing_files:
-                            os.remove(os.path.join(output_dir, ef))
-                    except Exception as clean_err:
-                        print(json.dumps({"status": "warning", "message": f"Failed to clean old files for {name}: {clean_err}"}))
-
-                    # Export
-                    target_album.ExportStills([still], output_dir, name, export_format)
-                    target_album.DeleteStills([still])
+                    # === ROBUST EXPORT STRATEGY ===
                     
-                    # Resize using sips
-                    # Resolve might append suffixes (e.g. name.1.1.1.jpg)
-                    # Let's find the file we just exported.
-                    found_files = [f for f in os.listdir(output_dir) if f.startswith(name) and f.lower().endswith(f".{export_format}")]
+                    # 1. Snapshot valid files before
+                    files_before = set(os.listdir(output_dir))
                     
-                    if found_files:
-                        # Use the most recent or matching file
-                        img_path = os.path.join(output_dir, found_files[0])
-                        # print(json.dumps({"status": "debug", "message": f"Resizing {img_path}..."}))
+                    # 2. Export with UNIQUE Name (UUID) to avoid collisions/overwriting
+                    # We use a UUID so we know exactly what we ASKED for.
+                    # If Resolve ignores it, the Diff strategy catches the file anyway.
+                    import uuid
+                    temp_export_name = str(uuid.uuid4())
+                    
+                    # === EXPORT STRATEGY: BRUTE FORCE ===
+                    # GrabStill puts the still somewhere. If we can't find it in Current, check ALL albums.
+                    
+                    success = False
+                    export_album = None
+                    
+                    # Build list of albums to try (Current first, then others)
+                    albums_to_try = []
+                    
+                    current = gallery.GetCurrentStillAlbum()
+                    if current:
+                        albums_to_try.append(current)
                         
+                    all_albums = gallery.GetGalleryStillAlbums()
+                    if all_albums:
+                        for a in all_albums:
+                            # Avoid duplicates by name (simple check)
+                            if current and a.GetLabel() == current.GetLabel(): continue
+                            albums_to_try.append(a)
+                    
+                    # Fallback
+                    if not albums_to_try and target_album:
+                        albums_to_try.append(target_album)
+                        
+                    # Try Export
+                    for album in albums_to_try:
+                        if album.ExportStills([still], output_dir, temp_export_name, export_format):
+                            success = True
+                            export_album = album
+                            # print(f"Debug: Exported from {album.GetLabel()}")
+                            break
+                    
+                    if not success:
+                        print(json.dumps({"status": "warning", "message": f"ExportStills failed from ALL {len(albums_to_try)} albums for {name}"}))
+                    else:
+                        # Cleanup
+                        export_album.DeleteStills([still])
+                    
+                    # 3. Snapshot files after
+                    files_after = set(os.listdir(output_dir))
+                    new_files = list(files_after - files_before)
+                    
+                    # Filter for our export format
+                    image_files = [f for f in new_files if f.lower().endswith(f".{export_format}")]
+                    
+                    if len(image_files) >= 1:
+                        # We found a new file!
+                        # It might be named `temp_export_name.jpg` OR `SceneName.jpg` (if Resolve ignored us).
+                        # In ANY case, we rename it to what we want: `vfxName.jpg`.
+                        
+                        # Use the first new file found (should be only one per iteration usually)
+                        exported_filename = image_files[0]
+                        exported_path = os.path.join(output_dir, exported_filename)
+                        
+                        # Target
+                        target_filename = f"{name}.{export_format}"
+                        target_path = os.path.join(output_dir, target_filename)
+                        
+                        if exported_filename != target_filename:
+                            try:
+                                if os.path.exists(target_path):
+                                    os.remove(target_path)
+                                os.rename(exported_path, target_path)
+                            except Exception as mv_err:
+                                print(json.dumps({"status": "warning", "message": f"Failed to rename {exported_filename}: {mv_err}"}))
+                                target_path = exported_path
+                        
+                        # 4. Resize
                         try:
                             result = subprocess.run(
-                                ["sips", "--resampleHeight", str(resize_height), img_path], 
+                                ["sips", "--resampleHeight", str(resize_height), target_path], 
                                 capture_output=True, 
                                 text=True,
                                 check=False
                             )
-                            if result.returncode != 0:
-                                print(json.dumps({"status": "warning", "message": f"Sips failed for {name}: {result.stderr}"}))
-                            # else:
-                            #    print(json.dumps({"status": "debug", "message": f"Sips success: {result.stdout}"}))
                         except Exception as sips_err:
-                             print(json.dumps({"status": "warning", "message": f"Sips execution error: {sips_err}"}))
+                                print(json.dumps({"status": "warning", "message": f"Sips error: {sips_err}"}))
+
                     else:
-                        print(json.dumps({"status": "warning", "message": f"Could not find exported image for {name} to resize."}))
-                        # print(json.dumps({"status": "debug", "message": f"Dir content: {os.listdir(output_dir)}"}))
+                         print(json.dumps({"status": "warning", "message": f"No new image file detected for {name} (Export requested as {temp_export_name})."}))
 
                     processed_count += 1
                     

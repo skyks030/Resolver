@@ -41,6 +41,7 @@ frame_rate = timeline.GetSetting("timelineFrameRate")
 # === Clips auf Videospur analysieren ===
 target_track_index = int(sys.argv[1]) if len(sys.argv) > 1 else 1
 print(f"🔍 Analysiere Clips auf Videospur: {target_track_index}")
+print(f"DEBUG: sys.argv: {sys.argv}")
 
 vfx_clips = timeline.GetItemListInTrack("video", target_track_index)
 if not vfx_clips:
@@ -51,6 +52,32 @@ if not vfx_clips:
 track_count = timeline.GetTrackCount("video")
 
 # === Marker für Benennung sammeln (wie in clip-indexing.py) ===
+import json
+
+app_clips_map = {} # frame_start -> vfx_name
+
+# Check for JSON input (renamed clips)
+if len(sys.argv) > 2:
+    json_path = sys.argv[2]
+    if os.path.exists(json_path):
+        try:
+            with open(json_path, 'r') as f:
+                clips_data = json.load(f)
+                # Build map: frameStart -> vfxName
+                for c in clips_data:
+                    # Key is string in JSON? We generally get int or string
+                    fs = int(c.get("frameStart", 0))
+                    name = c.get("vfxName", "")
+                    if fs > 0 and name:
+                        app_clips_map[fs] = name
+            
+            if not app_clips_map:
+                 print(f"⚠️ JSON loaded but map is empty. Raw Data: {clips_data}")
+            else:
+                 print(f"✅ Loaded {len(app_clips_map)} renamed clips from App.")
+        except Exception as e:
+            print(f"⚠️ Failed to load JSON map: {e}")
+
 markers = timeline.GetMarkers()
 white_markers = []
 
@@ -73,29 +100,43 @@ vfx_counter = 10
 for clip in vfx_clips:
     vfx_in = clip.GetStart()
     vfx_out = clip.GetEnd()
-
-    # Finde den letzten weißen Marker, der VOR (oder am) Start des Clips liegt
-    preceding_marker = None
-    for m in white_markers:
-        if m['frame'] <= vfx_in:
-            preceding_marker = m
-        else:
-            break
-            
-    if preceding_marker:
-        marker_name = preceding_marker['name']
+    
+    vfx_name = ""
+    
+    # 1. Check if we have an exact match from App Data (Precision might vary, check tolerance?)
+    # 1. Check if we have an exact match from App Data
+    # STRICT MATCH ONLY (User Request)
+    if vfx_in in app_clips_map:
+        vfx_name = app_clips_map[vfx_in]
+        print(f"✅ Match found for frame {vfx_in}: {vfx_name}")
+    else:
+        print(f"⚠️ No JSON match for frame {vfx_in}. Map keys: {list(app_clips_map.keys())[:5]}...")
+        # Fallback: Use Marker Logic
         
-        # Wenn wir einen neuen Marker-Bereich betreten, Counter resetten
-        if marker_name != current_marker_name:
-            current_marker_name = marker_name
-            vfx_counter = 10
+        # Finde den letzten weißen Marker, der VOR (oder am) Start des Clips liegt
+        preceding_marker = None
+        for m in white_markers:
+            if m['frame'] <= vfx_in:
+                preceding_marker = m
+            else:
+                break
+                
+        if preceding_marker:
+            marker_name = preceding_marker['name']
             
-        # Suffix bauen
-        suffix = str(vfx_counter).zfill(4)
-        vfx_name = f"{current_marker_name}_{suffix}"
-        
-        # Counter erhöhen
-        vfx_counter += 10
+            # Wenn wir einen neuen Marker-Bereich betreten, Counter resetten
+            if marker_name != current_marker_name:
+                current_marker_name = marker_name
+                vfx_counter = 10
+                
+            # Suffix bauen
+            suffix = str(vfx_counter).zfill(4)
+            vfx_name = f"{current_marker_name}_{suffix}"
+            
+            # Counter erhöhen
+            vfx_counter += 10
+            
+    if vfx_name:
         
         # Gruppe erstellen / bereinigen
         old_color_groups = project.GetColorGroupsList()

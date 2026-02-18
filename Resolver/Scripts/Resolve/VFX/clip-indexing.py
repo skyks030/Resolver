@@ -88,6 +88,17 @@ try:
     if len(sys.argv) > 2:
         vfx_end_marker_enabled = sys.argv[2].lower() == "true"
 
+    # Check for renaming map
+    renaming_map = {}
+    if len(sys.argv) > 3:
+        renaming_map_path = sys.argv[3]
+        if os.path.exists(renaming_map_path):
+             try:
+                 with open(renaming_map_path, 'r') as f:
+                     renaming_map = json.load(f)
+             except Exception as e:
+                 print(json.dumps({"status": "debug", "message": f"Failed to load renaming map: {e}"}))
+
     # === Analyze Timeline ===
     timeline_name = timeline.GetName()
     track_count = timeline.GetTrackCount("video")
@@ -184,6 +195,10 @@ try:
         
         # Counter erhöhen
         vfx_counter += 10
+        
+        # KEY CHANGE: Apply renaming map
+        if vfx_final_name in renaming_map:
+            vfx_final_name = renaming_map[vfx_final_name]
             
         # Marker setzen
         relative_start = clip_start - timeline_start_frame
