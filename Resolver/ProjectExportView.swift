@@ -448,6 +448,38 @@ struct ProjectExportView: View {
                             // Default to Track 1 if not set, but ideally user sets it in menu
                             let track = project.vfxTrackIndex?.isEmpty == false ? project.vfxTrackIndex! : "1"
                             
+                            // START LOADING
+                            isProcessing = true
+                            loadingMessage = "Grouping Clips..."
+                            indexingProgress = 0.0
+                            indexingCurrent = 0
+                            indexingTotal = 0
+                            
+                            // Progress Handler
+                            let progressHandler: (String) -> Void = { progressLine in
+                                if let range = progressLine.range(of: "PROGRESS: ") {
+                                    let valueStr = String(progressLine[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                                    let parts = valueStr.components(separatedBy: "/")
+                                    if parts.count == 2, let current = Int(parts[0]), let total = Int(parts[1]) {
+                                         DispatchQueue.main.async {
+                                             self.indexingCurrent = current
+                                             self.indexingTotal = total
+                                             if total > 0 {
+                                                 self.indexingProgress = Double(current) / Double(total)
+                                             }
+                                         }
+                                    }
+                                }
+                            }
+                            
+                            // Completion Handler
+                            let completionHandler: (String?) -> Void = { _ in
+                                DispatchQueue.main.async {
+                                    self.isProcessing = false
+                                    self.loadingMessage = ""
+                                }
+                            }
+                            
                             // Serialize Clip Data for Script
                             // We need to pass the *latest* data, so we fetch from manager
                             if let pIndex = projectManager.projects.firstIndex(where: { $0.id == project.id }),
@@ -473,13 +505,14 @@ struct ProjectExportView: View {
                                     
                                     print("🚀 Calling clip-grouping with Track: \(track), JSON: \(tmpURL.path)")
                                     
-                                    PyScriptRunner.run(scriptName: "Resolve/VFX/clip-grouping", args: [track, tmpURL.path], showOutput: true)
+                                    PyScriptRunner.run(scriptName: "Resolve/VFX/clip-grouping", args: [track, tmpURL.path], showOutput: true, onProgress: progressHandler, completion: completionHandler)
                                 } catch {
                                     print("Failed to encode clips for grouping: \(error)")
+                                    isProcessing = false // Reset on error
                                 }
                             } else {
                                 // Fallback if no run selected
-                                PyScriptRunner.run(scriptName: "Resolve/VFX/clip-grouping", args: [track], showOutput: true)
+                                PyScriptRunner.run(scriptName: "Resolve/VFX/clip-grouping", args: [track], showOutput: true, onProgress: progressHandler, completion: completionHandler)
                             }
                         } label: {
                             Label("Show Color Groups", systemImage: "paintpalette")
