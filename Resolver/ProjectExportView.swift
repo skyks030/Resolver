@@ -3,6 +3,9 @@ import UniformTypeIdentifiers
 
 struct ProjectExportView: View {
     @EnvironmentObject var projectManager: ProjectManager
+    // Scene Filter
+    @State private var selectedScenePrefix: String? = nil // Nil = All Scenes
+    
     @State private var selection: Set<UUID> = []
     @State private var selectedRunId: UUID?
     @State private var showDeleteConfirmation = false
@@ -45,7 +48,6 @@ struct ProjectExportView: View {
     @State private var indexingTotal: Int = 0
     @State private var indexingCurrent: Int = 0
     
-    
     // Export Formats
     enum ExportFormat {
         case csv
@@ -62,6 +64,48 @@ struct ProjectExportView: View {
             if let project = projectManager.currentProject {
                 headerView(project: project)
                 
+                // Scene Filter Toolbar
+                HStack {
+                    Text("Filter by Scene:")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    Picker("", selection: $selectedScenePrefix) {
+                        Text("All Scenes").tag(String?.none)
+                        
+                        if let run = getSelectedRun(project: project) {
+                            let scenes = getDerivedScenes(run: run)
+                            ForEach(scenes, id: \.self) { scenePrefix in
+                                let count = countClipsForScenePrefix(prefix: scenePrefix, run: run)
+                                Text("Scene \(scenePrefix) (\(count))").tag(scenePrefix as String?)
+                            }
+                        }
+                    }
+                    .frame(width: 200)
+                    .controlSize(.small)
+                    
+                    if selectedScenePrefix != nil {
+                        Button {
+                            selectedScenePrefix = nil
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    
+                    Spacer()
+                    
+                    if let run = getSelectedRun(project: project), let filteredCount = filteredClipsCount(run: run) {
+                         Text("Showing \(filteredCount) / \(run.clips.count) clips")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background(Color(nsColor: .controlBackgroundColor))
+                
                 Divider()
                 
                 toolbarView(project: project)
@@ -74,7 +118,9 @@ struct ProjectExportView: View {
                             
                             Divider()
                             
-                            dataRows(runBinding: runBinding)
+                            // We need to pass filtered INDICES to dataRows to maintain Bindings
+                            // We do this by iterating over the filtered indices
+                            filteredDataRows(runBinding: runBinding)
                         }
                         .padding(.vertical)
                     }
@@ -138,6 +184,7 @@ struct ProjectExportView: View {
                 }
                 vfxTrack = project.vfxTrackIndex ?? "1"
                 vfxThumbnailTrack = project.vfxThumbnailTrackIndex ?? "1"
+                selectedScenePrefix = nil // Reset filter on project change
             }
         }
         .onChange(of: projectManager.currentProject?.runs.count) { _ in
@@ -253,6 +300,9 @@ struct ProjectExportView: View {
                         }
                         .frame(width: 300)
                         .controlSize(.small)
+                        .onChange(of: selectedRunId) { _ in
+                            selectedScenePrefix = nil // Reset filter when changing run
+                        }
                     } else {
                         Text("No indexing runs yet.")
                             .font(.caption)
@@ -333,7 +383,7 @@ struct ProjectExportView: View {
                 }
                 
                 Divider().padding(.horizontal, 8)
-
+ 
                 // Marker Operations
                 VStack(spacing: 8) {
                     // Row 1: Marker Operations
@@ -581,14 +631,21 @@ struct ProjectExportView: View {
         }
         .padding(.horizontal)
     }
-
+    
+    // Replacement for dataRows that supports filtering
     @ViewBuilder
-    private func dataRows(runBinding: Binding<IndexingRun>) -> some View {
-        ForEach(runBinding.clips) { $clip in
+    private func filteredDataRows(runBinding: Binding<IndexingRun>) -> some View {
+        // 1. Get List of Selected Indices to maintain valid Bindings
+        let indices = getFilteredIndices(run: runBinding.wrappedValue)
+        
+        ForEach(indices, id: \.self) { index in
+            // Correctly bind to the specific index in the array
+            let clipBinding = runBinding.clips[index]
+            
             GridRow {
                 if showThumbnails {
                     if let project = projectManager.currentProject,
-                       let url = getThumbnailURL(project: project, run: runBinding.wrappedValue, clip: clip) {
+                       let url = getThumbnailURL(project: project, run: runBinding.wrappedValue, clip: clipBinding.wrappedValue) {
                         AsyncImage(url: url) { phase in
                             switch phase {
                             case .success(let image):
@@ -610,41 +667,87 @@ struct ProjectExportView: View {
                     }
                 }
                 if showVfxName {
-                    if isEditing { TextField("", text: $clip.vfxName).textFieldStyle(.plain) }
-                    else { Text(clip.vfxName).lineLimit(1).fixedSize() }
+                    if isEditing { TextField("", text: clipBinding.vfxName).textFieldStyle(.plain) }
+                    else { Text(clipBinding.wrappedValue.vfxName).lineLimit(1).fixedSize() }
                 }
                 if showDuration {
-                    Text(String(clip.duration ?? 0))
+                    Text(String(clipBinding.wrappedValue.duration ?? 0))
                 }
                 if showTcIn {
-                    if isEditing { TextField("", text: $clip.tcIn).textFieldStyle(.plain) }
-                    else { Text(clip.tcIn).lineLimit(1).fixedSize() }
+                    if isEditing { TextField("", text: clipBinding.tcIn).textFieldStyle(.plain) }
+                    else { Text(clipBinding.wrappedValue.tcIn).lineLimit(1).fixedSize() }
                 }
                 if showTcOut {
-                    if isEditing { TextField("", text: $clip.tcOut).textFieldStyle(.plain) }
-                    else { Text(clip.tcOut).lineLimit(1).fixedSize() }
+                    if isEditing { TextField("", text: clipBinding.tcOut).textFieldStyle(.plain) }
+                    else { Text(clipBinding.wrappedValue.tcOut).lineLimit(1).fixedSize() }
                 }
                 if showSourceTcIn {
-                    if isEditing { TextField("", text: $clip.sourceTcIn).textFieldStyle(.plain) }
-                    else { Text(clip.sourceTcIn).lineLimit(1).fixedSize() }
+                    if isEditing { TextField("", text: clipBinding.sourceTcIn).textFieldStyle(.plain) }
+                    else { Text(clipBinding.wrappedValue.sourceTcIn).lineLimit(1).fixedSize() }
                 }
                 if showSourceTcOut {
-                    if isEditing { TextField("", text: $clip.sourceTcOut).textFieldStyle(.plain) }
-                    else { Text(clip.sourceTcOut).lineLimit(1).fixedSize() }
+                    if isEditing { TextField("", text: clipBinding.sourceTcOut).textFieldStyle(.plain) }
+                    else { Text(clipBinding.wrappedValue.sourceTcOut).lineLimit(1).fixedSize() }
                 }
                 if showReelName {
-                    if isEditing { TextField("", text: $clip.reelName).textFieldStyle(.plain) }
-                    else { Text(clip.reelName).lineLimit(1).fixedSize() }
+                    if isEditing { TextField("", text: clipBinding.reelName).textFieldStyle(.plain) }
+                    else { Text(clipBinding.wrappedValue.reelName).lineLimit(1).fixedSize() }
                 }
                 if showFileNames {
-                    if isEditing { TextField("", text: $clip.fileNames).textFieldStyle(.plain) }
-                    else { Text(clip.fileNames).lineLimit(1).fixedSize() }
+                    if isEditing { TextField("", text: clipBinding.fileNames).textFieldStyle(.plain) }
+                    else { Text(clipBinding.wrappedValue.fileNames).lineLimit(1).fixedSize() }
                 }
             }
             .padding(.horizontal)
             
             Divider()
         }
+    }
+
+    /*
+    @ViewBuilder
+    private func dataRows(runBinding: Binding<IndexingRun>) -> some View {
+        ForEach(runBinding.clips) { $clip in
+            // Original implementation (Kept for reference if needed, but replaced by filteredDataRows)
+             GridRow { ... }
+        }
+    }
+     */
+    
+    // Helpers
+    private func getDerivedScenes(run: IndexingRun) -> [String] {
+        let prefixes = run.clips.compactMap { clip -> String? in
+            let parts = clip.vfxName.split(separator: "_")
+            if !parts.isEmpty {
+                return String(parts[0])
+            }
+            return nil
+        }
+        // distinct and sorted
+        return Array(Set(prefixes)).sorted()
+    }
+
+    private func countClipsForScenePrefix(prefix: String, run: IndexingRun) -> Int {
+        return run.clips.filter { clip in
+             clip.vfxName.hasPrefix(prefix + "_") || clip.vfxName == prefix
+        }.count
+    }
+
+    private func getFilteredIndices(run: IndexingRun) -> [Int] {
+        guard let prefix = selectedScenePrefix else {
+            // No filter -> All indices
+            return Array(run.clips.indices)
+        }
+        
+        return run.clips.indices.filter { i in
+            let name = run.clips[i].vfxName
+            return name.hasPrefix(prefix + "_") || name == prefix
+        }
+    }
+    
+    private func filteredClipsCount(run: IndexingRun) -> Int? {
+        guard selectedScenePrefix != nil else { return nil }
+        return getFilteredIndices(run: run).count
     }
 
     
