@@ -16,6 +16,7 @@ struct ClipData: Codable, Identifiable {
     var frameEnd: Int?
     var duration: Int?
     var originalVfxName: String?
+    var uniqueId: String? // Resolve Unique ID
 }
 
 struct MarkerData: Codable, Identifiable {
@@ -122,19 +123,63 @@ class ProjectManager: ObservableObject {
     func addIndexingRun(to projectId: UUID, clips: [ClipData], sceneMarkers: [MarkerData] = []) {
         guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
         
-        // Process Clips: Apply Renaming Map
+        // Process Clips
         var processedClips = clips
+
+        // SMART IDENTITY MATCHING
+        // Check previous run for content matches to preserve identity
+        if let lastRun = projects[index].runs.last {
+            // Build Content Map from Last Run
+            // Key: SourceIn|SourceOut|Duration|Reel
+            var contentMap: [String: ClipData] = [:]
+            for clip in lastRun.clips {
+                let key = "\(clip.sourceTcIn)|\(clip.sourceTcOut)|\(clip.duration ?? 0)|\(clip.reelName)"
+                contentMap[key] = clip
+            }
+            
+            // Check New Clips
+            for i in 0..<processedClips.count {
+                let clip = processedClips[i]
+                let key = "\(clip.sourceTcIn)|\(clip.sourceTcOut)|\(clip.duration ?? 0)|\(clip.reelName)"
+                
+                if let match = contentMap[key] {
+                    // MATCH FOUND!
+                    // This new clip works on the same content as an old clip.
+                    // We transfer the identity (Name & Original Name).
+                    
+                    print("🔗 Smart Match: \(clip.vfxName) -> \(match.vfxName) (Original: \(match.originalVfxName ?? ""))")
+                    
+                    processedClips[i].vfxName = match.vfxName
+                    processedClips[i].originalVfxName = match.originalVfxName
+                    
+                    // If the old clip was renamed, we must ensure the NEW UniqueID maps to that name
+                    if match.vfxName != match.originalVfxName {
+                         if let newUID = clip.uniqueId {
+                             if projects[index].vfxRenamingMap == nil {
+                                 projects[index].vfxRenamingMap = [:]
+                             }
+                             projects[index].vfxRenamingMap?[newUID] = match.vfxName
+                         }
+                    }
+                }
+            }
+        }
+        
+        // Process Clips: Apply Renaming Map (Standard Pass)
         let renamingMap = projects[index].vfxRenamingMap ?? [:]
         
         for i in 0..<processedClips.count {
-            // Ensure original name is set
+            // Ensure original name is set (if not already set by Smart Match)
             if processedClips[i].originalVfxName == nil {
                 processedClips[i].originalVfxName = processedClips[i].vfxName
             }
             
-            // Check if we have a rename rule for this original name
-            if let original = processedClips[i].originalVfxName, let newName = renamingMap[original] {
-                processedClips[i].vfxName = newName
+            // Check if we have a rename rule for this clip
+            // Priority: UniqueID > OriginalName
+            if let uid = processedClips[i].uniqueId, let newName = renamingMap[uid] {
+                 processedClips[i].vfxName = newName
+            } else if let original = processedClips[i].originalVfxName, let newName = renamingMap[original] {
+                 processedClips[i].vfxName = newName
             }
         }
         
@@ -171,7 +216,9 @@ class ProjectManager: ObservableObject {
         }
         
         // Update Map
+        print("🔄 Applying \(updates.count) Rename Updates to Project \(projectId)")
         for (originalName, newName) in updates {
+            print("   -> Map Update: \(originalName) = \(newName)")
             projects[index].vfxRenamingMap?[originalName] = newName
         }
         
@@ -191,8 +238,11 @@ class ProjectManager: ObservableObject {
                      clip.originalVfxName = clip.vfxName
                 }
                 
-                if let original = clip.originalVfxName, let newName = projects[index].vfxRenamingMap?[original] {
-                    clip.vfxName = newName
+                // Priority: Check UniqueID first
+                if let uid = clip.uniqueId, let newName = projects[index].vfxRenamingMap?[uid] {
+                     clip.vfxName = newName
+                } else if let original = clip.originalVfxName, let newName = projects[index].vfxRenamingMap?[original] {
+                     clip.vfxName = newName
                 }
                 
                 projects[index].runs[rIndex].clips[cIndex] = clip

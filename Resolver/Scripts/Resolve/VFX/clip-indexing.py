@@ -160,6 +160,10 @@ try:
     
     clip_count = len(videospur)
     
+    # Pre-calculate reserved names from renaming map
+    reserved_names = set(renaming_map.values())
+    used_names = set()
+    
     for i, clip in enumerate(videospur):
         # Progress Update for UI
         # Format: PROGRESS: <current>/<total>
@@ -185,20 +189,50 @@ try:
             current_marker_name = marker_name
             vfx_counter = 10
             
-        # Suffix bauen
-        suffix = str(vfx_counter).zfill(4)
+        # Collision Detection Loop
+        while True:
+            suffix = str(vfx_counter).zfill(4)
+            
+            if current_marker_name == "NO_SCENE":
+                 calculated_name = suffix
+            else:
+                 calculated_name = f"{current_marker_name}_{suffix}"
+            
+            # Check collisions
+            is_reserved = False
+            
+            if calculated_name in reserved_names:
+                 is_reserved = True
+            if calculated_name in used_names:
+                 is_reserved = True
+                 
+            if is_reserved:
+                 vfx_counter += 10 # Try next
+                 # Safety break? No, assuming eventually we find one.
+            else:
+                 vfx_final_name = calculated_name
+                 # Don't increment yet, we need to register it first
+                 break
         
-        if current_marker_name == "NO_SCENE":
-             vfx_final_name = suffix
-        else:
-             vfx_final_name = f"{current_marker_name}_{suffix}"
+        # Capture Original Name (Sequential Unique)
+        original_vfx_name = vfx_final_name
         
-        # Counter erhöhen
+        # Check for Manual Rename (Priority: Map)
+        # We need UniqueID
+        uid = clip.GetUniqueId()
+        if uid and uid in renaming_map:
+             vfx_final_name = renaming_map[uid] # Override with manual name
+             # Note: Manual names are allowed to collide if user forced them? 
+             # Or should we check collision for manual names too? 
+             # Usually manual wins.
+        elif vfx_final_name in renaming_map: # Legacy / Non-UID Map
+             vfx_final_name = renaming_map[vfx_final_name]
+
+        # Register THIS name as used
+        used_names.add(vfx_final_name)
+        
+        # Increment for NEXT clip
         vfx_counter += 10
-        
-        # KEY CHANGE: Apply renaming map
-        if vfx_final_name in renaming_map:
-            vfx_final_name = renaming_map[vfx_final_name]
             
         # Marker setzen
         relative_start = clip_start - timeline_start_frame
@@ -218,7 +252,7 @@ try:
         reel_name = ""
         source_tc_in = ""
         source_tc_out = ""
-
+        
         if mp_item:
             reel_name = mp_item.GetClipProperty("Reel Name") or ""
             file_start_tc = mp_item.GetClipProperty("Start TC")
@@ -244,7 +278,9 @@ try:
         
         # Build Clip Dict
         clip_data = {
+            "uniqueId": str(clip.GetUniqueId() or ""),
             "vfxName": str(vfx_final_name or ""),
+            "originalVfxName": str(original_vfx_name or ""),
             "tcIn": str(rec_tc_in or ""),
             "tcOut": str(rec_tc_out or ""),
             "sourceTcIn": str(source_tc_in or ""),

@@ -331,16 +331,20 @@ struct ProjectExportView: View {
                             // Find changes
                             var updates: [String: String] = [:]
                             
-                            // CRITICAL FIX: Read from `projectManager.projects` because `currentProject` 
-                            // is a struct and hasn't received the Binding updates from the TextFields yet.
-                            if let pIndex = projectManager.projects.firstIndex(where: { $0.id == project.id }),
-                               let run = projectManager.projects[pIndex].runs.first(where: { $0.id == runId }) {
+                            // CRITICAL FIX: Read from `project` (which is currentProject) because it has the Binding updates
+                            if let run = project.runs.first(where: { $0.id == runId }) {
                                 
                                 for clip in run.clips {
-                                    if let original = clip.originalVfxName, clip.vfxName != original {
-                                        updates[original] = clip.vfxName
+                                    // Use UniqueID if available, else fallback to OriginalName
+                                    if let key = clip.uniqueId ?? clip.originalVfxName {
+                                         if clip.vfxName != clip.originalVfxName { // Check if renamed
+                                             // Note: We map Key -> New Name.
+                                             print("📝 Detected Rename: \(clip.originalVfxName ?? "nil") -> \(clip.vfxName) (Key: \(key))")
+                                             updates[key] = clip.vfxName
+                                         }
                                     }
                                 }
+                                print("✅ Total Updates to Save: \(updates.count)")
                             }
                             
                             if !updates.isEmpty {
@@ -451,13 +455,15 @@ struct ProjectExportView: View {
                                 
                                 struct ClipPayload: Codable {
                                     let vfxName: String
+                                    let originalVfxName: String?
+                                    let uniqueId: String?
                                     let frameStart: Int
                                     let frameEnd: Int
                                 }
                                 
                                 let clipsPayload = run.clips.compactMap { clip -> ClipPayload? in
                                     guard let start = clip.frameStart, let end = clip.frameEnd else { return nil }
-                                    return ClipPayload(vfxName: clip.vfxName, frameStart: start, frameEnd: end)
+                                    return ClipPayload(vfxName: clip.vfxName, originalVfxName: clip.originalVfxName, uniqueId: clip.uniqueId, frameStart: start, frameEnd: end)
                                 }
                                 
                                 do {

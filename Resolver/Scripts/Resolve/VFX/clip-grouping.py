@@ -3,6 +3,8 @@
 import sys
 import os
 import importlib.util
+import json
+import traceback
 
 # === Pfad zur DaVinci Resolve Scripting API (macOS) ===
 sdk_path = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules"
@@ -32,165 +34,147 @@ if not project or not timeline:
     print("❌ Kein Projekt oder keine Timeline geöffnet.")
     sys.exit(1)
 
-timeline_name = timeline.GetName()
-timeline_start_frame = timeline.GetStartFrame()
-frame_rate = timeline.GetSetting("timelineFrameRate")
-
-#resolve.OpenPage("edit")
-
 # === Clips auf Videospur analysieren ===
 target_track_index = int(sys.argv[1]) if len(sys.argv) > 1 else 1
 print(f"🔍 Analysiere Clips auf Videospur: {target_track_index}")
-print(f"DEBUG: sys.argv: {sys.argv}")
 
 vfx_clips = timeline.GetItemListInTrack("video", target_track_index)
 if not vfx_clips:
     print(f"❌ Keine Clips auf Videospur {target_track_index} gefunden.")
     sys.exit(1)
 
-# === Gruppierung ===
-track_count = timeline.GetTrackCount("video")
-
-# === Marker für Benennung sammeln (wie in clip-indexing.py) ===
-import json
-
-app_clips_map = {} # frame_start -> vfx_name
-
-# Check for JSON input (renamed clips)
+# === JSON Map laden & Index-Driven Logic ===
+json_clips = []
 if len(sys.argv) > 2:
     json_path = sys.argv[2]
     if os.path.exists(json_path):
         try:
             with open(json_path, 'r') as f:
-                clips_data = json.load(f)
-                # Build map: frameStart -> vfxName
-                for c in clips_data:
-                    # Key is string in JSON? We generally get int or string
-                    fs = int(c.get("frameStart", 0))
-                    name = c.get("vfxName", "")
-                    if fs > 0 and name:
-                        app_clips_map[fs] = name
-            
-            if not app_clips_map:
-                 print(f"⚠️ JSON loaded but map is empty. Raw Data: {clips_data}")
-            else:
-                 print(f"✅ Loaded {len(app_clips_map)} renamed clips from App.")
+                json_clips = json.load(f)
+            print(f"✅ Loaded {len(json_clips)} clips from Index.")
         except Exception as e:
-            print(f"⚠️ Failed to load JSON map: {e}")
+            print(f"⚠️ Failed to load JSON Index: {e}")
 
-markers = timeline.GetMarkers()
-white_markers = []
+# === Build Timeline Lookup Maps ===
+# We need to find the clips on the timeline that correspond to the Index.
+# We scan the target track once.
+timeline_uid_map = {}
+timeline_frame_map = {} # Fallback
 
-if markers:
-    for frame_id, marker_data in markers.items():
-        if marker_data['color'] == 'Cream':
-            white_markers.append({
-                'frame': frame_id,
-                'name': marker_data['name']
-            })
+for item in vfx_clips:
+    try:
+        uid = item.GetUniqueId()
+        if uid:
+            timeline_uid_map[uid] = item
+        
+        start_frame = int(item.GetStart())
+        timeline_frame_map[start_frame] = item
+    except:
+        pass
 
-# Sortiere Marker nach Frame-ID aufsteigend
-white_markers.sort(key=lambda x: x['frame'])
+# === CSV Header ===
+print(f"GroupName,Clips-Count")
+sys.stdout.flush()
 
-print (f"GroupName,Clips-Count")
+# === Hauptschleife ===
+# Fallback: If no JSON, iterate timeline clips (Legacy Mode)
+items_to_process = []
 
-current_marker_name = None
-vfx_counter = 10
+if json_clips:
+    print(json.dumps({"status": "starting", "count": len(json_clips), "mode": "index-driven"}))
+    items_to_process = json_clips
+else:
+    print(json.dumps({"status": "starting", "count": len(vfx_clips), "mode": "legacy-timeline"}))
+    # Create pseudo-objects for legacy mode
+    for item in vfx_clips:
+        items_to_process.append({
+            "uniqueId": item.GetUniqueId(),
+            "vfxName": item.GetName(),
+            "frameStart": int(item.GetStart()),
+            "_legacy_item": item 
+        })
 
-# ... (imports remain)
-import traceback
-
-# ... (previous code remains until the loop)
-
-print(json.dumps({"status": "starting", "count": len(vfx_clips)}))
+sys.stdout.flush()
 
 processed_count = 0
-total_clips = len(vfx_clips)
+total_clips = len(items_to_process)
+track_count = timeline.GetTrackCount("video")
 
-for i, clip in enumerate(vfx_clips):
+for i, entry in enumerate(items_to_process):
     try:
-        vfx_in = clip.GetStart()
-        vfx_out = clip.GetEnd()
+        # 1. Resolve Timeline Item
+        timeline_item = None
         
-        vfx_name = ""
-        
-        # 1. Check if we have an exact match from App Data
-        # STRICT MATCH ONLY (User Request)
-        if vfx_in in app_clips_map:
-            vfx_name = app_clips_map[vfx_in]
-            print(json.dumps({"status": "debug", "message": f"Match found for frame {vfx_in}: {vfx_name}"}))
+        if "_legacy_item" in entry:
+            timeline_item = entry["_legacy_item"]
         else:
-            # print(f"⚠️ No JSON match for frame {vfx_in}. Map keys: {list(app_clips_map.keys())[:5]}...")
-            # Fallback: Use Marker Logic
+            # Index-Driven Lookup
+            uid = entry.get("uniqueId")
+            frame_start = int(entry.get("frameStart", 0))
             
-            # Finde den letzten weißen Marker, der VOR (oder am) Start des Clips liegt
-            preceding_marker = None
-            for m in white_markers:
-                if m['frame'] <= vfx_in:
-                    preceding_marker = m
-                else:
-                    break
-                    
-            if preceding_marker:
-                marker_name = preceding_marker['name']
-                
-                # Wenn wir einen neuen Marker-Bereich betreten, Counter resetten
-                if marker_name != current_marker_name:
-                    current_marker_name = marker_name
-                    vfx_counter = 10
-                    
-                # Suffix bauen
-                suffix = str(vfx_counter).zfill(4)
-                vfx_name = f"{current_marker_name}_{suffix}"
-                
-                # Counter erhöhen
-                vfx_counter += 10
-                
-        if vfx_name:
+            if uid and uid in timeline_uid_map:
+                timeline_item = timeline_uid_map[uid]
+            elif frame_start in timeline_frame_map:
+                 timeline_item = timeline_frame_map[frame_start]
+        
+        # If item not found on timeline, skip
+        if not timeline_item:
+            # print(json.dumps({"status": "debug", "message": f"Skipping {entry.get('vfxName')}: Not found on timeline."}))
+            continue
             
-            # Gruppe erstellen / bereinigen
-            old_color_groups = project.GetColorGroupsList()
-            # Vorherige Gruppe gleichen Namens löschen (Clean Start)
-            for group in old_color_groups:
-                if group.GetName() == vfx_name:
-                    project.DeleteColorGroup(group)
+        # 2. Get Current Data from Timeline Item
+        # (It might have moved since indexing)
+        vfx_in = timeline_item.GetStart()
+        vfx_out = timeline_item.GetEnd()
+        
+        # 3. Determine Group Name (From Index!)
+        vfx_name = entry.get("vfxName", "Untitled")
+        
+        # 4. Create/Get Color Group
+        groups = project.GetColorGroupsList()
+        target_group = None
+        if groups:
+             for g in groups:
+                 if g.GetName() == vfx_name:
+                     target_group = g
+                     break
+        
+        if not target_group:
+            target_group = project.AddColorGroup(vfx_name)
+        
+        if not target_group:
+             print(json.dumps({"status": "error", "message": f"Konnte Gruppe {vfx_name} nicht erstellen."}))
+             continue
 
-            color_group = project.AddColorGroup(vfx_name)
-            if not color_group:
-                print(json.dumps({"status": "error", "message": f"Gruppe '{vfx_name}' konnte nicht erstellt werden."}))
-                continue
-
-            # Alle Clips aus allen Videospuren analysieren und zur 'vfx_plates' hinzufügen
-            vfx_plates = []
+        # 5. Find Overlapping Clips (Grouping)
+        assigned_count = 0
+        
+        for track_idx in range(1, track_count + 1):
+            track_items = timeline.GetItemListInTrack("video", track_idx)
+            if not track_items: continue
             
-            # Durchlaufe alle Spuren um zugehörige Clips zu finden
-            for track_index in range(1, track_count + 1):
-                # Hole Clips der aktuellen Spur
-                current_track_clips = timeline.GetItemListInTrack("video", track_index)
-                if not current_track_clips:
-                    continue
-                    
-                for item in current_track_clips:
-                    # Prüfen ob der Clip im Zeitfenster des VFX-Clips liegt (Schnittmenge)
-                    if item.GetEnd() > vfx_in and item.GetStart() < vfx_out:
-                        vfx_plates.append(item)
-
-            # Clips der Gruppe zuweisen
-            for item in vfx_plates:
-                item.AssignToColorGroup(color_group)
-
-            print(json.dumps({"status": "debug", "message": f"Created group {vfx_name} with {len(vfx_plates)} clips"}))
+            for item in track_items:
+                # Check Overlap
+                i_start = item.GetStart()
+                i_end = item.GetEnd()
+                
+                if i_start < vfx_out and i_end > vfx_in:
+                    item.AssignToColorGroup(target_group)
+                    assigned_count += 1
+        
+        # CSV Output
+        print(f"{vfx_name},{assigned_count}")
+        sys.stdout.flush()
 
     except Exception as e:
-        print(json.dumps({"status": "error", "message": f"Error processing clip {i}: {str(e)}"}))
-        traceback.print_exc()
+        print(json.dumps({"status": "error", "message": f"Error item {i}: {str(e)}"}))
+        # traceback.print_exc()
+        sys.stdout.flush()
 
     processed_count += 1
+    # Only print progress every 5 items or last one to reduce spam? 
+    # Or just keep it.
     print(f"PROGRESS: {processed_count}/{total_clips}")
     sys.stdout.flush()
 
 print(json.dumps({"status": "success", "processed": processed_count}))
-
-
-
-#resolve.OpenPage("edit")
