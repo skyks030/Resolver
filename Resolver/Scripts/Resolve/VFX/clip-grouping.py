@@ -97,79 +97,100 @@ print (f"GroupName,Clips-Count")
 current_marker_name = None
 vfx_counter = 10
 
-for clip in vfx_clips:
-    vfx_in = clip.GetStart()
-    vfx_out = clip.GetEnd()
-    
-    vfx_name = ""
-    
-    # 1. Check if we have an exact match from App Data (Precision might vary, check tolerance?)
-    # 1. Check if we have an exact match from App Data
-    # STRICT MATCH ONLY (User Request)
-    if vfx_in in app_clips_map:
-        vfx_name = app_clips_map[vfx_in]
-        print(f"✅ Match found for frame {vfx_in}: {vfx_name}")
-    else:
-        print(f"⚠️ No JSON match for frame {vfx_in}. Map keys: {list(app_clips_map.keys())[:5]}...")
-        # Fallback: Use Marker Logic
-        
-        # Finde den letzten weißen Marker, der VOR (oder am) Start des Clips liegt
-        preceding_marker = None
-        for m in white_markers:
-            if m['frame'] <= vfx_in:
-                preceding_marker = m
-            else:
-                break
-                
-        if preceding_marker:
-            marker_name = preceding_marker['name']
-            
-            # Wenn wir einen neuen Marker-Bereich betreten, Counter resetten
-            if marker_name != current_marker_name:
-                current_marker_name = marker_name
-                vfx_counter = 10
-                
-            # Suffix bauen
-            suffix = str(vfx_counter).zfill(4)
-            vfx_name = f"{current_marker_name}_{suffix}"
-            
-            # Counter erhöhen
-            vfx_counter += 10
-            
-    if vfx_name:
-        
-        # Gruppe erstellen / bereinigen
-        old_color_groups = project.GetColorGroupsList()
-        # Vorherige Gruppe gleichen Namens löschen (Clean Start)
-        for group in old_color_groups:
-            if group.GetName() == vfx_name:
-                project.DeleteColorGroup(group)
+# ... (imports remain)
+import traceback
 
-        color_group = project.AddColorGroup(vfx_name)
-        if not color_group:
-            print(f"❌ Gruppe '{vfx_name}' konnte nicht erstellt werden.")
-            continue
+# ... (previous code remains until the loop)
 
-        # Alle Clips aus allen Videospuren analysieren und zur 'vfx_plates' hinzufügen
-        vfx_plates = []
+print(json.dumps({"status": "starting", "count": len(vfx_clips)}))
+
+processed_count = 0
+total_clips = len(vfx_clips)
+
+for i, clip in enumerate(vfx_clips):
+    try:
+        vfx_in = clip.GetStart()
+        vfx_out = clip.GetEnd()
         
-        # Durchlaufe alle Spuren um zugehörige Clips zu finden
-        for track_index in range(1, track_count + 1):
-            # Hole Clips der aktuellen Spur
-            current_track_clips = timeline.GetItemListInTrack("video", track_index)
-            if not current_track_clips:
+        vfx_name = ""
+        
+        # 1. Check if we have an exact match from App Data
+        # STRICT MATCH ONLY (User Request)
+        if vfx_in in app_clips_map:
+            vfx_name = app_clips_map[vfx_in]
+            print(json.dumps({"status": "debug", "message": f"Match found for frame {vfx_in}: {vfx_name}"}))
+        else:
+            # print(f"⚠️ No JSON match for frame {vfx_in}. Map keys: {list(app_clips_map.keys())[:5]}...")
+            # Fallback: Use Marker Logic
+            
+            # Finde den letzten weißen Marker, der VOR (oder am) Start des Clips liegt
+            preceding_marker = None
+            for m in white_markers:
+                if m['frame'] <= vfx_in:
+                    preceding_marker = m
+                else:
+                    break
+                    
+            if preceding_marker:
+                marker_name = preceding_marker['name']
+                
+                # Wenn wir einen neuen Marker-Bereich betreten, Counter resetten
+                if marker_name != current_marker_name:
+                    current_marker_name = marker_name
+                    vfx_counter = 10
+                    
+                # Suffix bauen
+                suffix = str(vfx_counter).zfill(4)
+                vfx_name = f"{current_marker_name}_{suffix}"
+                
+                # Counter erhöhen
+                vfx_counter += 10
+                
+        if vfx_name:
+            
+            # Gruppe erstellen / bereinigen
+            old_color_groups = project.GetColorGroupsList()
+            # Vorherige Gruppe gleichen Namens löschen (Clean Start)
+            for group in old_color_groups:
+                if group.GetName() == vfx_name:
+                    project.DeleteColorGroup(group)
+
+            color_group = project.AddColorGroup(vfx_name)
+            if not color_group:
+                print(json.dumps({"status": "error", "message": f"Gruppe '{vfx_name}' konnte nicht erstellt werden."}))
                 continue
-                
-            for item in current_track_clips:
-                # Prüfen ob der Clip im Zeitfenster des VFX-Clips liegt (Schnittmenge)
-                if item.GetEnd() > vfx_in and item.GetStart() < vfx_out:
-                    vfx_plates.append(item)
 
-        # Clips der Gruppe zuweisen
-        for item in vfx_plates:
-            item.AssignToColorGroup(color_group)
+            # Alle Clips aus allen Videospuren analysieren und zur 'vfx_plates' hinzufügen
+            vfx_plates = []
+            
+            # Durchlaufe alle Spuren um zugehörige Clips zu finden
+            for track_index in range(1, track_count + 1):
+                # Hole Clips der aktuellen Spur
+                current_track_clips = timeline.GetItemListInTrack("video", track_index)
+                if not current_track_clips:
+                    continue
+                    
+                for item in current_track_clips:
+                    # Prüfen ob der Clip im Zeitfenster des VFX-Clips liegt (Schnittmenge)
+                    if item.GetEnd() > vfx_in and item.GetStart() < vfx_out:
+                        vfx_plates.append(item)
 
-        print(f"{vfx_name},{len(vfx_plates)}")
+            # Clips der Gruppe zuweisen
+            for item in vfx_plates:
+                item.AssignToColorGroup(color_group)
+
+            print(json.dumps({"status": "debug", "message": f"Created group {vfx_name} with {len(vfx_plates)} clips"}))
+
+    except Exception as e:
+        print(json.dumps({"status": "error", "message": f"Error processing clip {i}: {str(e)}"}))
+        traceback.print_exc()
+
+    processed_count += 1
+    print(f"PROGRESS: {processed_count}/{total_clips}")
+    sys.stdout.flush()
+
+print(json.dumps({"status": "success", "processed": processed_count}))
+
 
 
 #resolve.OpenPage("edit")
