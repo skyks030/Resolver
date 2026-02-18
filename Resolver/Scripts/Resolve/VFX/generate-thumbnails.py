@@ -142,37 +142,20 @@ try:
         print(json.dumps({"status": "debug", "message": "Getting Current Still Album..."}))
         
         # === Album Management ===
-        # 1. Log and Find valid albums
+        # SIMPLIFIED STRATEGY for Production Stability
+        # 1. Try to get Current Album. If it exists, use it.
+        # 2. If valid albums exist, use the first one.
+        # 3. Only try to find "resolver_temp_stills" if we have options, but don't force it if it breaks things.
+        
         albums = gallery.GetGalleryStillAlbums()
-        target_album = None
+        target_album = gallery.GetCurrentStillAlbum()
         
-        if albums:
-            print(json.dumps({"status": "debug", "message": f"Found {len(albums)} albums: {[a.GetLabel() for a in albums]}"}))
-            for album in albums:
-                lbl = album.GetLabel()
-                if lbl == "resolver_temp_stills":
-                    gallery.SetCurrentStillAlbum(album)
-                    target_album = album
-                    break
-        
-        # 2. If no target yet, try to find ANY valid album (prefer "Stills" or just first valid)
         if not target_album and albums:
-             for album in albums:
-                 if album.GetLabel(): # Valid label
-                     target_album = album
-                     gallery.SetCurrentStillAlbum(album)
-                     break
-    
-        # 3. Last Resort: Current
-        if not target_album:
-             current = gallery.GetCurrentStillAlbum()
-             if current and current.GetLabel():
-                 target_album = current
-        
-        # 4. Desperation Fallback: Just take the first one
-        if not target_album and albums:
-            print(json.dumps({"status": "warning", "message": "No labeled album found. Using first available album."}))
             target_album = albums[0]
+
+        if target_album:
+             print(json.dumps({"status": "debug", "message": f"Using album: {target_album.GetLabel() if target_album.GetLabel() else 'Nameless'}"}))
+             gallery.SetCurrentStillAlbum(target_album)
     
         if not target_album:
             err_msg = "No valid Still Album found (and list is empty). Please create a 'Stills' album in Color Page."
@@ -245,26 +228,36 @@ try:
                     # Build list of albums to try (Current first, then others)
                     albums_to_try = []
                     
+                    # Trust Current Album first and foremost
                     current = gallery.GetCurrentStillAlbum()
-                    if current and current.GetLabel(): # Ensure label is valid
+                    if current:
                         albums_to_try.append(current)
                         
                     all_albums = gallery.GetGalleryStillAlbums()
                     if all_albums:
                         for a in all_albums:
-                            # Avoid duplicates and check label
-                            lbl = a.GetLabel()
-                            if not lbl: continue # Skip invalid albums
+                            # Don't skip nameless albums anymore - Production might only have one!
+                            # lbl = a.GetLabel()
+                            # if not lbl: continue 
                             
-                            if current and lbl == current.GetLabel(): continue
-                            albums_to_try.append(a)
+                            # Avoid duplicates (compare objects or labels?)
+                            # Checking simple object containment or redundancy
+                            is_duplicate = False
+                            if current:
+                                 # Resolve API objects might not equal, so checks are tricky.
+                                 # But let's try to avoid obvious identical labels if they exist
+                                 if a.GetLabel() and current.GetLabel() and a.GetLabel() == current.GetLabel():
+                                     is_duplicate = True
+                            
+                            if not is_duplicate:
+                                albums_to_try.append(a)
                     
                     # Fallback
                     if not albums_to_try and target_album:
                         albums_to_try.append(target_album)
                         
                     # Debug: Print Albums we are trying
-                    album_names = [a.GetLabel() for a in albums_to_try]
+                    album_names = [a.GetLabel() if a.GetLabel() else "Nameless" for a in albums_to_try]
                     # print(json.dumps({"status": "debug", "message": f"Attempting export from albums: {album_names}"}))
                     
                     # Try Export
@@ -284,7 +277,7 @@ try:
                         # FATAL ERROR - Abort Script
                         err_msg = f"FATAL: ExportStills failed from ALL {len(albums_to_try)} albums for {name}. Albums: {album_names} Dir: {output_dir}"
                         print(json.dumps({"status": "error", "message": err_msg}))
-                        
+                            
                         # Try to cleanup the still so it doesn't pile up
                         try:
                             # We don't know which album it's in, but we can try to delete from 'current' or 'target'
@@ -297,55 +290,55 @@ try:
                     else:
                         # Cleanup success
                         export_album.DeleteStills([still])
-                    
-                    # 3. Snapshot files after
-                    files_after = set(os.listdir(output_dir))
-                    new_files = list(files_after - files_before)
-                    
-                    # Filter for our export format
-                    image_files = [f for f in new_files if f.lower().endswith(f".{export_format}")]
-                    
-                    if len(image_files) >= 1:
-                        # We found a new file!
-                        # It might be named `temp_export_name.jpg` OR `SceneName.jpg` (if Resolve ignored us).
-                        # In ANY case, we rename it to what we want: `vfxName.jpg`.
                         
-                        # Use the first new file found (should be only one per iteration usually)
-                        exported_filename = image_files[0]
-                        exported_path = os.path.join(output_dir, exported_filename)
+                        # 3. Snapshot files after
+                        files_after = set(os.listdir(output_dir))
+                        new_files = list(files_after - files_before)
                         
-                        # Target
-                        target_filename = f"{name}.{export_format}"
-                        target_path = os.path.join(output_dir, target_filename)
+                        # Filter for our export format
+                        image_files = [f for f in new_files if f.lower().endswith(f".{export_format}")]
                         
-                        if exported_filename != target_filename:
+                        if len(image_files) >= 1:
+                            # We found a new file!
+                            # It might be named `temp_export_name.jpg` OR `SceneName.jpg` (if Resolve ignored us).
+                            # In ANY case, we rename it to what we want: `vfxName.jpg`.
+                            
+                            # Use the first new file found (should be only one per iteration usually)
+                            exported_filename = image_files[0]
+                            exported_path = os.path.join(output_dir, exported_filename)
+                            
+                            # Target
+                            target_filename = f"{name}.{export_format}"
+                            target_path = os.path.join(output_dir, target_filename)
+                            
+                            if exported_filename != target_filename:
+                                try:
+                                    if os.path.exists(target_path):
+                                        os.remove(target_path)
+                                    os.rename(exported_path, target_path)
+                                except Exception as mv_err:
+                                    print(json.dumps({"status": "warning", "message": f"Failed to rename {exported_filename}: {mv_err}"}))
+                                    target_path = exported_path
+                            
+                            # 4. Resize
                             try:
-                                if os.path.exists(target_path):
-                                    os.remove(target_path)
-                                os.rename(exported_path, target_path)
-                            except Exception as mv_err:
-                                print(json.dumps({"status": "warning", "message": f"Failed to rename {exported_filename}: {mv_err}"}))
-                                target_path = exported_path
+                                result = subprocess.run(
+                                    ["sips", "--resampleHeight", str(resize_height), target_path], 
+                                    capture_output=True, 
+                                    text=True,
+                                    check=False
+                                )
+                            except Exception as sips_err:
+                                    print(json.dumps({"status": "warning", "message": f"Sips error: {sips_err}"}))
+        
+                        else:
+                             print(json.dumps({"status": "warning", "message": f"No new image file detected for {name} (Export requested as {temp_export_name})."}))
+        
+                        processed_count += 1
                         
-                        # 4. Resize
-                        try:
-                            result = subprocess.run(
-                                ["sips", "--resampleHeight", str(resize_height), target_path], 
-                                capture_output=True, 
-                                text=True,
-                                check=False
-                            )
-                        except Exception as sips_err:
-                                print(json.dumps({"status": "warning", "message": f"Sips error: {sips_err}"}))
-    
-                    else:
-                         print(json.dumps({"status": "warning", "message": f"No new image file detected for {name} (Export requested as {temp_export_name})."}))
-    
-                    processed_count += 1
-                    
-                    # === Progress Update ===
-                    print(f"PROGRESS: {processed_count}/{len(clips)}")
-                    sys.stdout.flush()
+                        # === Progress Update ===
+                        print(f"PROGRESS: {processed_count}/{len(clips)}")
+                        sys.stdout.flush()
                 else:
                     print(json.dumps({"status": "debug", "message": "GrabStill returned None"}))
                     
