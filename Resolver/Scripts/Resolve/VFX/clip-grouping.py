@@ -100,7 +100,25 @@ processed_count = 0
 total_clips = len(items_to_process)
 track_count = timeline.GetTrackCount("video")
 
+# === OPTIMIZATION: Cache All Timeline Clips ===
+# Instead of querying the API for every single VFX clip (which is slow),
+# we query all tracks once and store the items.
+all_timeline_clips = []
+print(json.dumps({"status": "progress", "message": "Caching timeline clips..."}))
+sys.stdout.flush()
+
+for track_idx in range(1, track_count + 1):
+    track_items = timeline.GetItemListInTrack("video", track_idx)
+    if track_items:
+        for item in track_items:
+            all_timeline_clips.append(item)
+
+print(f"✅ Cached {len(all_timeline_clips)} clips from {track_count} tracks.")
+
 for i, entry in enumerate(items_to_process):
+    # Immediate Progress Update at Start of Loop
+    print(f"PROGRESS: {processed_count}/{total_clips}")
+    sys.stdout.flush()
     try:
         # 1. Resolve Timeline Item
         timeline_item = None
@@ -146,21 +164,18 @@ for i, entry in enumerate(items_to_process):
              print(json.dumps({"status": "error", "message": f"Konnte Gruppe {vfx_name} nicht erstellen."}))
              continue
 
-        # 5. Find Overlapping Clips (Grouping)
+        # 5. Find Overlapping Clips (Grouping) - USING CACHE
         assigned_count = 0
         
-        for track_idx in range(1, track_count + 1):
-            track_items = timeline.GetItemListInTrack("video", track_idx)
-            if not track_items: continue
+        # We iterate over our cached list of ALL timeline items
+        for item in all_timeline_clips:
+            # Check Overlap
+            i_start = item.GetStart()
+            i_end = item.GetEnd()
             
-            for item in track_items:
-                # Check Overlap
-                i_start = item.GetStart()
-                i_end = item.GetEnd()
-                
-                if i_start < vfx_out and i_end > vfx_in:
-                    item.AssignToColorGroup(target_group)
-                    assigned_count += 1
+            if i_start < vfx_out and i_end > vfx_in:
+                item.AssignToColorGroup(target_group)
+                assigned_count += 1
         
         # CSV Output
         print(f"{vfx_name},{assigned_count}")
