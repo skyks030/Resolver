@@ -351,6 +351,10 @@ try:
                     
             except Exception as ex:
                  print(json.dumps({"status": "error", "message": f"Error processing {clip.get('name')}: {ex}"}))
+                 # Re-raise FATAL errors to stop the loop
+                 if "FATAL" in str(ex):
+                     raise
+                 
                  import traceback
                  traceback.print_exc()
                  # Continue to next
