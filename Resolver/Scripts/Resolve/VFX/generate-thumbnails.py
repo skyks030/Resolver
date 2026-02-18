@@ -120,61 +120,77 @@ try:
 
 
     # === Switch to Color Page ===
-    print(json.dumps({"status": "debug", "message": "Switching to Color Page..."}))
-    if not resolve.OpenPage("color"):
-         print(json.dumps({"status": "debug", "message": "OpenPage returned False (might be already open or failed)"}))
     
-    # === Gallery / Album Management ===
-    print(json.dumps({"status": "debug", "message": "Getting Gallery..."}))
-    gallery = project.GetGallery()
-    if not gallery:
-        raise Exception("Could not access Gallery (GetGallery returned None)")
-
-    # Try to find or create "resolver_temp_stills"
-    # Note: API might not support creating albums easily. We try to set it.
-    # If SetCurrentStillAlbum returns False, it might not exist.
-    # We will strive to use the CURRENT album if we can't create one, 
-    # BUT we must be careful not to delete user stills.
-    
-    print(json.dumps({"status": "debug", "message": "Getting Current Still Album..."}))
-    
-    # === Album Management ===
-    # 1. Try to find "resolver_temp_stills"
-    albums = gallery.GetGalleryStillAlbums()
-    target_album = None
-    
-    if albums:
-        for album in albums:
-            if album.GetLabel() == "resolver_temp_stills":
-                gallery.SetCurrentStillAlbum(album)
-                target_album = album
-                break
-    
-    # 2. If not found, use Current (and print it)
-    if not target_album:
-         current = gallery.GetCurrentStillAlbum()
-         if current:
-             target_album = current
-             # print(json.dumps({"status": "debug", "message": f"Using existing album: {current.GetLabel()}"}))
-         else:
-             print(json.dumps({"status": "error", "message": "No Current Still Album found."}))
-             sys.exit(1)
-         
-
-    
-
-
-    # === Processing ===
-    processed_count = 0
-    
-    print(json.dumps({"status": "starting", "count": len(clips)}))
-    
+    # WRAP EVERYTHING in try/finally to ensure tracks are restored
     try:
-        for clip in clips:
+        print(json.dumps({"status": "debug", "message": "Switching to Color Page..."}))
+        if not resolve.OpenPage("color"):
+             print(json.dumps({"status": "debug", "message": "OpenPage returned False (might be already open or failed)"}))
+        
+        # === Gallery / Album Management ===
+        print(json.dumps({"status": "debug", "message": "Getting Gallery..."}))
+        gallery = project.GetGallery()
+        if not gallery:
+            raise Exception("Could not access Gallery (GetGallery returned None)")
+    
+        # Try to find or create "resolver_temp_stills"
+        # Note: API might not support creating albums easily. We try to set it.
+        # If SetCurrentStillAlbum returns False, it might not exist.
+        # We will strive to use the CURRENT album if we can't create one, 
+        # BUT we must be careful not to delete user stills.
+        
+        print(json.dumps({"status": "debug", "message": "Getting Current Still Album..."}))
+        
+        # === Album Management ===
+        # 1. Log and Find valid albums
+        albums = gallery.GetGalleryStillAlbums()
+        target_album = None
+        
+        if albums:
+            print(json.dumps({"status": "debug", "message": f"Found {len(albums)} albums: {[a.GetLabel() for a in albums]}"}))
+            for album in albums:
+                lbl = album.GetLabel()
+                if lbl == "resolver_temp_stills":
+                    gallery.SetCurrentStillAlbum(album)
+                    target_album = album
+                    break
+        
+        # 2. If no target yet, try to find ANY valid album (prefer "Stills" or just first valid)
+        if not target_album and albums:
+             for album in albums:
+                 if album.GetLabel(): # Valid label
+                     target_album = album
+                     gallery.SetCurrentStillAlbum(album)
+                     break
+    
+        # 3. Last Resort: Current
+        if not target_album:
+             current = gallery.GetCurrentStillAlbum()
+             if current and current.GetLabel():
+                 target_album = current
+        
+        # 4. Desperation Fallback: Just take the first one
+        if not target_album and albums:
+            print(json.dumps({"status": "warning", "message": "No labeled album found. Using first available album."}))
+            target_album = albums[0]
+    
+        if not target_album:
+             print(json.dumps({"status": "error", "message": "No valid Still Album found (and list is empty). Please create a 'Stills' album in Color Page."}))
+             # Let it continue to fail gracefully loop by loop? No, better warn.
+             
+     
+        # === Main Loop ===
+        success_count = 0
+        processed_count = 0
+        
+        print(json.dumps({"status": "starting", "count": len(clips)}))
+        
+        for i, clip in enumerate(clips):
+            name = clip["name"]
             try:
                 frame_start = int(clip.get("frameStart", 0))
                 frame_end = int(clip.get("frameEnd", 0))
-                name = clip.get("name", "unknown")
+                # name = clip.get("name", "unknown") # This line is removed
                 
                 # Get timeline frame rate
                 # We need it for TC conversion
@@ -193,24 +209,18 @@ try:
                      timeline.SetCurrentTimecode(target_tc)
                      time.sleep(0.2) # Allow Resolve to seek
                 
+                # Force Switch to Target Album to ensure GrabStill puts it there
+                if target_album:
+                    gallery.SetCurrentStillAlbum(target_album)
+    
                 # Grab Still
-                # print(json.dumps({"status": "debug", "message": "Grabbing Still..."}))
-                
-                # Verify what is at the current timecode on the target track
-                # This helps debug why GrabStill might return None (e.g. empty space)
-                # Note: This is an expensive check, so only do it if we are debugging or having issues?
-                # For now, let's just log the TC we are jumping to.
-                
                 still = timeline.GrabStill()
+                time.sleep(0.05) # Brief pause to ensures still is ready
                 
                 if not still:
                     # Retry once immediately without sleep
                     still = timeline.GrabStill()
                     
-                if not still:
-                     # One more try after moving slightly?
-                     pass
-                     
                 if still:
                     # Clean up existing files for this clip name to prevent duplicates/stale files
                     # Resolve might export as name.jpg, name.1.1.1.jpg etc.
@@ -221,8 +231,6 @@ try:
                     files_before = set(os.listdir(output_dir))
                     
                     # 2. Export with UNIQUE Name (UUID) to avoid collisions/overwriting
-                    # We use a UUID so we know exactly what we ASKED for.
-                    # If Resolve ignores it, the Diff strategy catches the file anyway.
                     import uuid
                     temp_export_name = str(uuid.uuid4())
                     
@@ -236,14 +244,17 @@ try:
                     albums_to_try = []
                     
                     current = gallery.GetCurrentStillAlbum()
-                    if current:
+                    if current and current.GetLabel(): # Ensure label is valid
                         albums_to_try.append(current)
                         
                     all_albums = gallery.GetGalleryStillAlbums()
                     if all_albums:
                         for a in all_albums:
-                            # Avoid duplicates by name (simple check)
-                            if current and a.GetLabel() == current.GetLabel(): continue
+                            # Avoid duplicates and check label
+                            lbl = a.GetLabel()
+                            if not lbl: continue # Skip invalid albums
+                            
+                            if current and lbl == current.GetLabel(): continue
                             albums_to_try.append(a)
                     
                     # Fallback
@@ -265,9 +276,7 @@ try:
                             export_album = album
                             break
                         else:
-                            # Detailed failure log
-                            # print(json.dumps({"status": "debug", "message": f"Export failed for album '{album.GetLabel()}' to '{output_dir}/{temp_export_name}.{export_format}'"}))
-                            pass
+                             pass
                     
                     if not success:
                         print(json.dumps({"status": "warning", "message": f"ExportStills failed from ALL {len(albums_to_try)} albums for {name}. Albums: {album_names} Dir: {output_dir}"}))
@@ -314,10 +323,10 @@ try:
                             )
                         except Exception as sips_err:
                                 print(json.dumps({"status": "warning", "message": f"Sips error: {sips_err}"}))
-
+    
                     else:
                          print(json.dumps({"status": "warning", "message": f"No new image file detected for {name} (Export requested as {temp_export_name})."}))
-
+    
                     processed_count += 1
                     
                     # === Progress Update ===
@@ -333,7 +342,7 @@ try:
                  # Continue to next
     finally:
         # Restore Tracks
-        # print(json.dumps({"status": "debug", "message": "Restoring tracks..."}))
+        print(json.dumps({"status": "debug", "message": "Restoring tracks..."}))
         for i, state in track_states.items():
             if hasattr(timeline, "SetTrackEnable"):
                 timeline.SetTrackEnable("video", i, state)

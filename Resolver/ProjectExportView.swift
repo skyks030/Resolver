@@ -148,6 +148,16 @@ struct ProjectExportView: View {
             }
             Button("Cancel", role: .cancel) { }
         }
+        .overlay {
+            if isIndexing || isProcessing {
+                LoadingOverlay(
+                    message: loadingMessage.isEmpty ? (isIndexing ? "Indexing VFX Clips..." : "Generating Thumbnails...") : loadingMessage,
+                    progress: (isIndexing || isProcessing) ? indexingProgress : nil,
+                    current: (isIndexing || isProcessing) ? indexingCurrent : nil,
+                    total: (isIndexing || isProcessing) ? indexingTotal : nil
+                )
+            }
+        }
         .alert("Delete Project?", isPresented: $showDeleteProjectConfirmation) {
             Button("Delete", role: .destructive) {
                 if let project = projectManager.currentProject {
@@ -485,16 +495,7 @@ struct ProjectExportView: View {
         .padding()
         .background(Color(nsColor: .controlBackgroundColor))
         .fixedSize(horizontal: false, vertical: true)
-        .overlay {
-            if isIndexing || isProcessing {
-                LoadingOverlay(
-                    message: loadingMessage.isEmpty ? (isIndexing ? "Indexing VFX Clips..." : "Generating Thumbnails...") : loadingMessage,
-                    progress: (isIndexing || isProcessing) ? indexingProgress : nil,
-                    current: (isIndexing || isProcessing) ? indexingCurrent : nil,
-                    total: (isIndexing || isProcessing) ? indexingTotal : nil
-                )
-            }
-        }
+
         .onAppear {
             // Window Open -> Dock Icon visible
             NSApp.setActivationPolicy(.regular)
