@@ -3,20 +3,107 @@ import Combine
 
 // MARK: - Data Models
 
-struct ClipData: Codable, Identifiable {
+struct ClipData: Codable, Identifiable, Equatable {
     var id: UUID = UUID()
-    var vfxName: String
-    var tcIn: String
-    var tcOut: String
-    var sourceTcIn: String
-    var sourceTcOut: String
-    var fileNames: String
-    var reelName: String
-    var frameStart: Int?
-    var frameEnd: Int?
-    var duration: Int?
-    var originalVfxName: String?
-    var uniqueId: String? // Resolve Unique ID
+    var dict: [String: String] = [:]
+    
+    // Convenience Accessors
+    var vfxName: String {
+        get { dict["VFX Name"] ?? "" }
+        set { dict["VFX Name"] = newValue }
+    }
+    var originalVfxName: String? {
+        get { dict["Original VFX Name"] }
+        set { dict["Original VFX Name"] = newValue }
+    }
+    var uniqueId: String? {
+        get { dict["Resolve Unique ID"] }
+        set { dict["Resolve Unique ID"] = newValue }
+    }
+    var tcIn: String { get { dict["TC In"] ?? "" } set { dict["TC In"] = newValue } }
+    var tcOut: String { get { dict["TC Out"] ?? "" } set { dict["TC Out"] = newValue } }
+    var sourceTcIn: String { get { dict["Source TC In"] ?? "" } set { dict["Source TC In"] = newValue } }
+    var sourceTcOut: String { get { dict["Source TC Out"] ?? "" } set { dict["Source TC Out"] = newValue } }
+    var fileNames: String { get { dict["File Names"] ?? "" } set { dict["File Names"] = newValue } }
+    var reelName: String { get { dict["Reel Name"] ?? "" } set { dict["Reel Name"] = newValue } }
+    
+    var frameStart: Int? {
+        get { if let val = dict["Frame Start"] { return Int(val) }; return nil }
+        set { dict["Frame Start"] = newValue.map { String($0) } }
+    }
+    var frameEnd: Int? {
+        get { if let val = dict["Frame End"] { return Int(val) }; return nil }
+        set { dict["Frame End"] = newValue.map { String($0) } }
+    }
+    var duration: Int? {
+        get { if let val = dict["Duration"] { return Int(val) }; return nil }
+        set { dict["Duration"] = newValue.map { String($0) } }
+    }
+    var customMetadata: [String: String]? {
+        get { return dict }
+        set { if let v = newValue { for (k,val) in v { dict[k] = val } } }
+    }
+    
+    enum CodingKeys: String, CodingKey {
+        case id, dict, vfxName, tcIn, tcOut, sourceTcIn, sourceTcOut, fileNames, reelName, frameStart, frameEnd, duration, originalVfxName, uniqueId, customMetadata
+    }
+    
+    init() {}
+    
+    init(id: UUID = UUID(), dict: [String: String]) {
+        self.id = id
+        self.dict = dict
+    }
+    
+    init(id: UUID, vfxName: String, tcIn: String, tcOut: String, sourceTcIn: String, sourceTcOut: String, fileNames: String, reelName: String, frameStart: Int?, frameEnd: Int?, duration: Int?, originalVfxName: String?, uniqueId: String?, customMetadata: [String:String]? = nil) {
+        self.id = id
+        self.vfxName = vfxName
+        self.tcIn = tcIn
+        self.tcOut = tcOut
+        self.sourceTcIn = sourceTcIn
+        self.sourceTcOut = sourceTcOut
+        self.fileNames = fileNames
+        self.reelName = reelName
+        self.frameStart = frameStart
+        self.frameEnd = frameEnd
+        self.duration = duration
+        if let o = originalVfxName { self.originalVfxName = o }
+        if let u = uniqueId { self.uniqueId = u }
+        if let custom = customMetadata {
+            for (k, v) in custom { self.dict[k] = v }
+        }
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        
+        if let d = try container.decodeIfPresent([String: String].self, forKey: .dict) {
+            self.dict = d
+        } else {
+            if let v = try? container.decodeIfPresent(String.self, forKey: .vfxName) { self.vfxName = v }
+            if let v = try? container.decodeIfPresent(String.self, forKey: .tcIn) { self.tcIn = v }
+            if let v = try? container.decodeIfPresent(String.self, forKey: .tcOut) { self.tcOut = v }
+            if let v = try? container.decodeIfPresent(String.self, forKey: .sourceTcIn) { self.sourceTcIn = v }
+            if let v = try? container.decodeIfPresent(String.self, forKey: .sourceTcOut) { self.sourceTcOut = v }
+            if let v = try? container.decodeIfPresent(String.self, forKey: .fileNames) { self.fileNames = v }
+            if let v = try? container.decodeIfPresent(String.self, forKey: .reelName) { self.reelName = v }
+            if let v = try? container.decodeIfPresent(Int.self, forKey: .frameStart) { self.frameStart = v }
+            if let v = try? container.decodeIfPresent(Int.self, forKey: .frameEnd) { self.frameEnd = v }
+            if let v = try? container.decodeIfPresent(Int.self, forKey: .duration) { self.duration = v }
+            if let v = try? container.decodeIfPresent(String.self, forKey: .originalVfxName) { self.originalVfxName = v }
+            if let v = try? container.decodeIfPresent(String.self, forKey: .uniqueId) { self.uniqueId = v }
+            if let c = try? container.decodeIfPresent([String:String].self, forKey: .customMetadata) {
+                for (k, val) in c { self.dict[k] = val }
+            }
+        }
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(dict, forKey: .dict)
+    }
 }
 
 struct MarkerData: Codable, Identifiable {
@@ -33,6 +120,13 @@ struct MarkerData: Codable, Identifiable {
     }
 }
 
+struct SceneData: Codable, Identifiable {
+    var id: UUID = UUID()
+    var name: String
+    var startTC: String
+}
+
+// Legacy Run structure for migration
 struct IndexingRun: Codable, Identifiable {
     var id: UUID = UUID()
     var date: Date = Date()
@@ -44,7 +138,8 @@ struct Project: Codable, Identifiable {
     var id: UUID = UUID()
     var name: String
     var createdDate: Date = Date()
-    var runs: [IndexingRun] = []
+    var runs: [IndexingRun]? = [] // Legacy, kept for decoding old JSON
+    var sceneMarkers: [MarkerData]? = [] // Moved to project level
     var vfxTrackIndex: String? = nil
     var vfxThumbnailTrackIndex: String? = nil
     var vfxEndMarkerEnabled: Bool? = false // Default OFF
@@ -60,7 +155,16 @@ struct ProjectStore: Codable {
 
 class ProjectManager: ObservableObject {
     @Published var projects: [Project] = []
-    @Published var currentProject: Project?
+    @Published var currentProject: Project? {
+        didSet {
+            // Load master list whenever project changes
+            loadMasterList()
+            loadScenes()
+        }
+    }
+    
+    @Published var currentMasterList: [ClipData] = []
+    @Published var currentScenes: [SceneData] = []
     
     // Helper to get formatted date
     static let dateFormatter: DateFormatter = {
@@ -70,12 +174,13 @@ class ProjectManager: ObservableObject {
         return f
     }()
     
+    private let appSupportDir: URL
     private let saveUrl: URL
     
     init() {
         // Find documents directory
         let paths = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-        let appSupportDir = paths[0].appendingPathComponent("com.skyks030.Resolver")
+        self.appSupportDir = paths[0].appendingPathComponent("com.skyks030.Resolver")
         
         // Create directory if not exists
         try? FileManager.default.createDirectory(at: appSupportDir, withIntermediateDirectories: true)
@@ -83,6 +188,31 @@ class ProjectManager: ObservableObject {
         self.saveUrl = appSupportDir.appendingPathComponent("projects.json")
         
         load()
+        migrateLegacyProjects()
+    }
+    
+    // MARK: - Directories
+    func projectDirectory(for projectId: UUID) -> URL {
+        let dir = appSupportDir.appendingPathComponent(projectId.uuidString)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+    
+    func masterListUrl(for projectId: UUID) -> URL {
+        let dir = projectDirectory(for: projectId)
+        let newUrl = dir.appendingPathComponent("Master_VFX_List_\(projectId.uuidString).csv")
+        let oldUrl = dir.appendingPathComponent("Master_VFX_List.csv")
+        
+        if FileManager.default.fileExists(atPath: oldUrl.path) && !FileManager.default.fileExists(atPath: newUrl.path) {
+            try? FileManager.default.moveItem(at: oldUrl, to: newUrl)
+        }
+        
+        return newUrl
+    }
+    
+    func scenesUrl(for projectId: UUID) -> URL {
+        let dir = projectDirectory(for: projectId)
+        return dir.appendingPathComponent("Scenes.csv")
     }
     
     // MARK: - Actions
@@ -92,6 +222,16 @@ class ProjectManager: ObservableObject {
         projects.append(newProject)
         selectProject(newProject.id)
         save()
+        
+        // Auto-populate default columns
+        let defaultDict = [
+            "VFX Name": "New Shot",
+            "Duration": "",
+            "Clip Name": "",
+            "Record TC": ""
+        ]
+        currentMasterList = [ClipData(dict: defaultDict)]
+        saveMasterList() // so it persists
     }
     
     func selectProject(_ id: UUID?) {
@@ -100,14 +240,19 @@ class ProjectManager: ObservableObject {
         } else {
             currentProject = nil
         }
-        save()
+        save() // saves selected state
     }
     
     func deleteProject(_ id: UUID) {
         projects.removeAll { $0.id == id }
         if currentProject?.id == id {
-            currentProject = nil
+            self.selectProject(projects.last?.id)
         }
+        
+        // Delete the subdirectory for this project
+        let dir = appSupportDir.appendingPathComponent(id.uuidString)
+        try? FileManager.default.removeItem(at: dir)
+        
         save()
     }
     
@@ -120,133 +265,146 @@ class ProjectManager: ObservableObject {
         save()
     }
     
-    func addIndexingRun(to projectId: UUID, clips: [ClipData], sceneMarkers: [MarkerData] = []) {
-        guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
-        
-        // Process Clips
-        var processedClips = clips
-
-        // SMART IDENTITY MATCHING
-        // Check previous run for content matches to preserve identity
-        if let lastRun = projects[index].runs.last {
-            // Build Content Map from Last Run
-            // Key: SourceIn|SourceOut|Duration|Reel
-            var contentMap: [String: ClipData] = [:]
-            for clip in lastRun.clips {
-                let key = "\(clip.sourceTcIn)|\(clip.sourceTcOut)|\(clip.duration ?? 0)|\(clip.reelName)"
-                contentMap[key] = clip
-            }
-            
-            // Check New Clips
-            for i in 0..<processedClips.count {
-                let clip = processedClips[i]
-                let key = "\(clip.sourceTcIn)|\(clip.sourceTcOut)|\(clip.duration ?? 0)|\(clip.reelName)"
-                
-                if let match = contentMap[key] {
-                    // MATCH FOUND!
-                    // This new clip works on the same content as an old clip.
-                    // We transfer the identity (Name & Original Name).
-                    
-                    print("🔗 Smart Match: \(clip.vfxName) -> \(match.vfxName) (Original: \(match.originalVfxName ?? ""))")
-                    
-                    processedClips[i].vfxName = match.vfxName
-                    processedClips[i].originalVfxName = match.originalVfxName
-                    
-                    // If the old clip was renamed, we must ensure the NEW UniqueID maps to that name
-                    if match.vfxName != match.originalVfxName {
-                         if let newUID = clip.uniqueId {
-                             if projects[index].vfxRenamingMap == nil {
-                                 projects[index].vfxRenamingMap = [:]
-                             }
-                             projects[index].vfxRenamingMap?[newUID] = match.vfxName
-                         }
+    // MARK: - Scene Management
+    
+    func loadScenes() {
+        guard let proj = currentProject else {
+            currentScenes = []
+            return
+        }
+        let url = scenesUrl(for: proj.id)
+        if FileManager.default.fileExists(atPath: url.path) {
+            do {
+                let text = try String(contentsOf: url, encoding: .utf8)
+                var loaded: [SceneData] = []
+                let rows = text.components(separatedBy: .newlines)
+                for row in rows.dropFirst() {
+                    let cols = row.components(separatedBy: ",")
+                    if cols.count >= 3 {
+                        if let uuid = UUID(uuidString: cols[0]) {
+                            loaded.append(SceneData(id: uuid, name: cols[1], startTC: cols[2]))
+                        }
                     }
                 }
+                currentScenes = loaded
+                print("🔄 Loaded \(currentScenes.count) scenes from Scenes.csv")
+            } catch {
+                print("❌ Error loading Scenes CSV: \(error)")
+                currentScenes = []
+            }
+        } else {
+            currentScenes = []
+        }
+    }
+    
+    func saveScenes() {
+        guard let proj = currentProject else { return }
+        let url = scenesUrl(for: proj.id)
+        var csv = "id,name,startTC\n"
+        for scene in currentScenes {
+            let safeName = scene.name.replacingOccurrences(of: ",", with: ";")
+            let safeTC = scene.startTC.replacingOccurrences(of: ",", with: "")
+            csv += "\(scene.id.uuidString),\(safeName),\(safeTC)\n"
+        }
+        do {
+            try csv.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            print("❌ Error saving Scenes CSV: \(error)")
+        }
+    }
+    
+    // MARK: - Master List Management
+    
+    func loadMasterList() {
+        guard let proj = currentProject else {
+            currentMasterList = []
+            return
+        }
+        let url = masterListUrl(for: proj.id)
+        if FileManager.default.fileExists(atPath: url.path) {
+            do {
+                currentMasterList = try CSVManager.read(from: url)
+                print("🔄 Loaded \(currentMasterList.count) clips from Master_VFX_List.csv for \(proj.name)")
+            } catch {
+                print("❌ Error loading Master List CSV: \(error)")
+                currentMasterList = []
+            }
+        } else {
+            currentMasterList = []
+        }
+    }
+    
+    func saveMasterList() {
+        guard let proj = currentProject else { return }
+        let url = masterListUrl(for: proj.id)
+        do {
+            try CSVManager.write(clips: currentMasterList, to: url)
+        } catch {
+            print("❌ Error saving Master List CSV: \(error)")
+        }
+    }
+    
+    func updateMasterList(with clips: [ClipData], sceneMarkers: [MarkerData] = []) {
+        currentMasterList = clips
+        saveMasterList() // Save CSV immediately
+        
+        // Update markers in metadata project.json if provided
+        if let proj = currentProject, let index = projects.firstIndex(where: { $0.id == proj.id }) {
+            if !sceneMarkers.isEmpty {
+                projects[index].sceneMarkers = sceneMarkers
+                currentProject = projects[index]
+                save() // Save metadata to project.json
             }
         }
-        
-        // Process Clips: Apply Renaming Map (Standard Pass)
+    }
+    
+    // Helper to get imported clips and apply renaming map
+    func prepareImportedClips(_ clips: [ClipData], projectId: UUID) -> [ClipData] {
+        guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return clips }
         let renamingMap = projects[index].vfxRenamingMap ?? [:]
         
+        var processedClips = clips
         for i in 0..<processedClips.count {
-            // Ensure original name is set (if not already set by Smart Match)
             if processedClips[i].originalVfxName == nil {
                 processedClips[i].originalVfxName = processedClips[i].vfxName
             }
-            
-            // Check if we have a rename rule for this clip
-            // Priority: UniqueID > OriginalName
             if let uid = processedClips[i].uniqueId, let newName = renamingMap[uid] {
                  processedClips[i].vfxName = newName
             } else if let original = processedClips[i].originalVfxName, let newName = renamingMap[original] {
                  processedClips[i].vfxName = newName
             }
         }
-        
-        var run = IndexingRun(clips: processedClips)
-        run.sceneMarkers = sceneMarkers
-        
-        projects[index].runs.append(run)
-        
-        // Update current project if active
-        if currentProject?.id == projectId {
-            currentProject = projects[index]
-        }
-        
-        save()
-    }
-    
-    func deleteIndexingRun(projectId: UUID, runId: UUID) {
-        guard let pIndex = projects.firstIndex(where: { $0.id == projectId }) else { return }
-        
-        projects[pIndex].runs.removeAll { $0.id == runId }
-        
-        if currentProject?.id == projectId {
-            currentProject = projects[pIndex]
-        }
-        save()
+        return processedClips
     }
     
     func updateVfxRenamingMap(projectId: UUID, updates: [String: String]) {
         guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
         
-        // Initialize if nil
         if projects[index].vfxRenamingMap == nil {
             projects[index].vfxRenamingMap = [:]
         }
         
-        // Update Map
         print("🔄 Applying \(updates.count) Rename Updates to Project \(projectId)")
         for (originalName, newName) in updates {
-            print("   -> Map Update: \(originalName) = \(newName)")
             projects[index].vfxRenamingMap?[originalName] = newName
         }
         
-        // Apply to ALL runs in the project to ensure consistency
-        for rIndex in 0..<projects[index].runs.count {
-            for cIndex in 0..<projects[index].runs[rIndex].clips.count {
-                var clip = projects[index].runs[rIndex].clips[cIndex]
-                
-                // Backfill original name if missing (assume current is original if not set, 
-                // but if we are renaming, we likely want to be careful. 
-                // For existing clips, if original is nil, we assume vfxName IS the original 
-                // UNLESS we just matched it. But to be safe, we only rename if we have an original name.)
+        // Apply to current master list if this is the active project
+        if currentProject?.id == projectId {
+            for i in 0..<currentMasterList.count {
+                var clip = currentMasterList[i]
                 if clip.originalVfxName == nil {
-                     // If we are applying a rename, we must assume the CURRENT name is the original 
-                     // if it matches the key, OR we assume it was never renamed.
-                     // A safer bet for legacy data: set original = current
                      clip.originalVfxName = clip.vfxName
                 }
                 
-                // Priority: Check UniqueID first
                 if let uid = clip.uniqueId, let newName = projects[index].vfxRenamingMap?[uid] {
                      clip.vfxName = newName
                 } else if let original = clip.originalVfxName, let newName = projects[index].vfxRenamingMap?[original] {
                      clip.vfxName = newName
                 }
-                
-                projects[index].runs[rIndex].clips[cIndex] = clip
+                currentMasterList[i] = clip
             }
+            saveMasterList() // Automatically updates the CSV!
         }
         
         if currentProject?.id == projectId {
@@ -302,11 +460,49 @@ class ProjectManager: ObservableObject {
             let data = try Data(contentsOf: saveUrl)
             let store = try JSONDecoder().decode(ProjectStore.self, from: data)
             self.projects = store.projects
-            self.selectProject(store.selectedProjectId)
+            
+            if store.selectedProjectId == nil, let lastProj = store.projects.last {
+                self.selectProject(lastProj.id)
+            } else {
+                self.selectProject(store.selectedProjectId)
+            }
         } catch {
             print("⚠️ Keine Projekte geladen (oder Fehler): \(error.localizedDescription)")
             self.projects = []
             self.currentProject = nil
+        }
+    }
+    
+    // MARK: - Migration
+    
+    private func migrateLegacyProjects() {
+        var needsSave = false
+        
+        for i in 0..<projects.count {
+            if let runs = projects[i].runs, !runs.isEmpty {
+                // Determine the "Master" list from the last run (highest date)
+                if let lastRun = runs.sorted(by: { $0.date > $1.date }).first {
+                    print("🔄 Migrating legacy runs for project \(projects[i].name) to Master List CSV...")
+                    
+                    let csvUrl = masterListUrl(for: projects[i].id)
+                    do {
+                        try CSVManager.write(clips: lastRun.clips, to: csvUrl)
+                        projects[i].sceneMarkers = lastRun.sceneMarkers // Migrate markers to project level
+                        projects[i].runs = nil // Nullify to save JSON space
+                        needsSave = true
+                    } catch {
+                        print("❌ Migration failed for project \(projects[i].name): \(error)")
+                    }
+                }
+            }
+        }
+        
+        if needsSave {
+            save()
+            // reload master list if currently selected one was migrated
+            if let current = currentProject, projects.first(where: { $0.id == current.id })?.runs == nil {
+                loadMasterList()
+            }
         }
     }
 }

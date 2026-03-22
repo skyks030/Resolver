@@ -70,6 +70,7 @@ class CrashManager: ObservableObject {
 
 struct CrashReportView: View {
     @ObservedObject var crashManager = CrashManager.shared
+    @Environment(\.dismiss) var dismiss
     
     var body: some View {
         VStack(spacing: 16) {
@@ -114,8 +115,7 @@ struct CrashReportView: View {
                 Spacer()
                 Button("Close") {
                     crashManager.hasCrashReport = false
-                    // Ideally close window, but SwiftUI window management is tricky from inside.
-                    // We can just hide content or rely on user closing it.
+                    dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
             }

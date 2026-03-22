@@ -284,7 +284,21 @@ struct DropDownMenu: View {
             // Try decoding new format
             if let runData = try? JSONDecoder().decode(IncomingRunData.self, from: data) {
                  let clips = runData.clips.map { raw in
-                    ClipData(vfxName: raw.vfxName, tcIn: raw.tcIn, tcOut: raw.tcOut, sourceTcIn: raw.sourceTcIn, sourceTcOut: raw.sourceTcOut, fileNames: raw.fileNames, reelName: raw.reelName, frameStart: raw.frameStart, frameEnd: raw.frameEnd)
+                    ClipData(
+                        id: UUID(),
+                        vfxName: raw.vfxName,
+                        tcIn: raw.tcIn,
+                        tcOut: raw.tcOut,
+                        sourceTcIn: raw.sourceTcIn,
+                        sourceTcOut: raw.sourceTcOut,
+                        fileNames: raw.fileNames,
+                        reelName: raw.reelName,
+                        frameStart: raw.frameStart,
+                        frameEnd: raw.frameEnd,
+                        duration: raw.duration,
+                        originalVfxName: nil,
+                        uniqueId: raw.uniqueId
+                    )
                  }
                  
                  let markers = runData.sceneMarkers.map { raw in
@@ -292,7 +306,11 @@ struct DropDownMenu: View {
                  }
                  
                  if let project = projectManager.currentProject {
-                     projectManager.addIndexingRun(to: project.id, clips: clips, sceneMarkers: markers)
+                     let imported = projectManager.prepareImportedClips(clips, projectId: project.id)
+                     var newMaster = projectManager.currentMasterList
+                     let items = MergeManager.compare(master: newMaster, imported: imported)
+                     MergeManager.applyMerge(master: &newMaster, mergeItems: items)
+                     projectManager.updateMasterList(with: newMaster, sceneMarkers: markers)
                  } else {
                      showAlert("CSV Output:\n" + clips.map { $0.vfxName }.joined(separator: ","))
                  }
@@ -302,11 +320,29 @@ struct DropDownMenu: View {
             // Fallback to old format
             let rawClips = try JSONDecoder().decode([IncomingClipData].self, from: data)
             let clips = rawClips.map { raw in
-                ClipData(vfxName: raw.vfxName, tcIn: raw.tcIn, tcOut: raw.tcOut, sourceTcIn: raw.sourceTcIn, sourceTcOut: raw.sourceTcOut, fileNames: raw.fileNames, reelName: raw.reelName, frameStart: raw.frameStart, frameEnd: raw.frameEnd)
+                ClipData(
+                    id: UUID(),
+                    vfxName: raw.vfxName,
+                    tcIn: raw.tcIn,
+                    tcOut: raw.tcOut,
+                    sourceTcIn: raw.sourceTcIn,
+                    sourceTcOut: raw.sourceTcOut,
+                    fileNames: raw.fileNames,
+                    reelName: raw.reelName,
+                    frameStart: raw.frameStart,
+                    frameEnd: raw.frameEnd,
+                    duration: raw.duration,
+                    originalVfxName: nil,
+                    uniqueId: raw.uniqueId
+                )
             }
             
             if let project = projectManager.currentProject {
-                projectManager.addIndexingRun(to: project.id, clips: clips)
+                let imported = projectManager.prepareImportedClips(clips, projectId: project.id)
+                var newMaster = projectManager.currentMasterList
+                let items = MergeManager.compare(master: newMaster, imported: imported)
+                MergeManager.applyMerge(master: &newMaster, mergeItems: items)
+                projectManager.updateMasterList(with: newMaster)
             } else {
                 showAlert("CSV Output:\n" + clips.map { $0.vfxName }.joined(separator: ","))
             }
@@ -379,6 +415,7 @@ struct MenuRow: View {
 struct IncomingRunData: Decodable {
     let clips: [IncomingClipData]
     let sceneMarkers: [IncomingMarkerData]
+    let warning: String?
 }
 
 struct IncomingMarkerData: Decodable {
@@ -389,7 +426,8 @@ struct IncomingMarkerData: Decodable {
 
 struct IncomingClipData: Decodable {
     let vfxName, tcIn, tcOut, sourceTcIn, sourceTcOut, fileNames, reelName: String
-    let frameStart, frameEnd: Int?
+    let frameStart, frameEnd, duration: Int?
+    let uniqueId: String?
 }
 
 struct WindowAccessor: NSViewRepresentable {
