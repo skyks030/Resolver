@@ -1336,7 +1336,73 @@ struct ProjectExportView: View {
     }
     
     private func exportExcel(project: Project) {
-        // Placeholder for excel export refactoring (skipped for brevity)
+        let panel = NSSavePanel()
+        panel.title = "Export Master List Excel"
+        if let excelType = UTType(filenameExtension: "xlsx") {
+            panel.allowedContentTypes = [excelType]
+        }
+        let dateStr = Formatter.filename.string(from: Date())
+        panel.nameFieldStringValue = "\(project.name)_Master_\(dateStr).xlsx"
+        
+        if panel.runModal() == .OK, let destinationURL = panel.url {
+            isProcessing = true
+            loadingMessage = "Generating Excel File..."
+            
+            var headers = ["Thumbnail"]
+            headers.append(contentsOf: activeColumns)
+            
+            var clipsData = [[String: String]]()
+            for clip in projectManager.currentMasterList {
+                var clipDict = clip.dict
+                if let thumbURL = getThumbnailURL(project: project, clip: clip) {
+                    clipDict["Thumbnail"] = thumbURL.path
+                } else {
+                    clipDict["Thumbnail"] = ""
+                }
+                clipsData.append(clipDict)
+            }
+            
+            let tmpExcelURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".xlsx")
+            let payload: [String: Any] = [
+                "outputPath": tmpExcelURL.path,
+                "headers": headers,
+                "clips": clipsData
+            ]
+            
+            do {
+                let data = try JSONSerialization.data(withJSONObject: payload)
+                let tmpPayloadURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+                try data.write(to: tmpPayloadURL)
+                
+                PyScriptRunner.run(scriptName: "Resolve/Tools/export_excel", args: [tmpPayloadURL.path], showOutput: false, completion: { _ in
+                    DispatchQueue.main.async {
+                        self.isProcessing = false
+                        self.loadingMessage = ""
+                        
+                        if FileManager.default.fileExists(atPath: tmpExcelURL.path) {
+                            do {
+                                if FileManager.default.fileExists(atPath: destinationURL.path) {
+                                    try FileManager.default.removeItem(at: destinationURL)
+                                }
+                                try FileManager.default.moveItem(at: tmpExcelURL, to: destinationURL)
+                            } catch {
+                                self.showIndexingError = true
+                                self.indexingErrorMessage = "Failed to save Excel file: \(error.localizedDescription)"
+                            }
+                        } else {
+                            self.showIndexingError = true
+                            self.indexingErrorMessage = "Python script failed to generate the Excel file. Is xlsxwriter installed?"
+                        }
+                        try? FileManager.default.removeItem(at: tmpPayloadURL)
+                    }
+                })
+            } catch {
+                isProcessing = false
+                loadingMessage = ""
+                showIndexingError = true
+                indexingErrorMessage = "Failed to serialize Excel payload: \(error.localizedDescription)"
+            }
+        }
     }
     
     private func finishHeaderEditing() {

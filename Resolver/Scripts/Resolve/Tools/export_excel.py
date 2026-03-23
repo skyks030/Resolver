@@ -61,26 +61,19 @@ def export_excel(payload_path):
             worksheet.set_row(row_idx, row_height)
 
             for col_idx, header in enumerate(headers):
-                val = ""
                 if header == "Thumbnail":
-                    img_path = clip.get("thumbnail")
+                    img_path = clip.get("Thumbnail")
                     if img_path and os.path.exists(img_path):
                         # Restoring the "better" version (Place in Cell)
                         # We add 'description' which is reported to help with #UNKNOWN! errors on some Excel versions
                         worksheet.embed_image(row_idx, col_idx, img_path, {
-                            'description': f'Thumbnail for {clip.get("vfxName", "Clip")}',
+                            'description': f'Thumbnail',
                             'url': None,
                             'tip': 'Clip Thumbnail'
                         })
                     continue
-                elif header == "VFX-Name": val = clip.get("vfxName", "")
-                elif header == "Duration": val = clip.get("duration", "")
-                elif header == "Rec-TC-In": val = clip.get("tcIn", "")
-                elif header == "Rec-TC-Out": val = clip.get("tcOut", "")
-                elif header == "Source-TC-In": val = clip.get("sourceTcIn", "")
-                elif header == "Source-TC-Out": val = clip.get("sourceTcOut", "")
-                elif header == "Reel-Name": val = clip.get("reelName", "")
-                elif header == "File-Names": val = clip.get("fileNames", "")
+                else:
+                    val = clip.get(header, "")
                 
                 worksheet.write(row_idx, col_idx, val, cell_format)
                 
