@@ -68,7 +68,7 @@ class PyScriptRunner {
         task.environment = env
         
         let isDebugMode = UserDefaults.standard.bool(forKey: "isDebugMode")
-        let needsOutput = showOutput || isDebugMode || completion != nil
+        let needsOutput = showOutput || completion != nil || isDebugMode
 
         if needsOutput {
             // Create Persistent Log File using CrashManager
@@ -137,7 +137,7 @@ class PyScriptRunner {
                             
                             try? FileManager.default.removeItem(at: tempOutputFile)
                             
-                            if showOutput || isDebugMode {
+                            if showOutput {
                                 showOutputWindow(outputString, enableDownload: enableDownload)
                             }
                             completion?(fileOutput)
@@ -152,7 +152,7 @@ class PyScriptRunner {
                                  }
                              }
                              
-                             if showOutput || isDebugMode {
+                             if showOutput {
                                  showOutputWindow(outputString, enableDownload: enableDownload)
                              }
                              completion?(outputString)

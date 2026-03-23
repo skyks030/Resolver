@@ -51,6 +51,9 @@ struct ProjectExportView: View {
     @State private var isEditingMasterlist = false
     @State private var selectedForDelete: Set<UUID> = []
     
+    // Duplicate Scanner State
+    @State private var showOnlyDuplicates = false
+    
     // Sort & Order
     @State private var sortColumn: String? = nil
     @State private var sortAscending: Bool = true
@@ -116,6 +119,10 @@ struct ProjectExportView: View {
                 // Top Control Section (Glass Effect)
                 VStack(spacing: 0) {
                     headerView(project: project)
+                    
+                    if !duplicateVFXNames.isEmpty {
+                        duplicateWarningBanner
+                    }
                     
                     Divider()
                     
@@ -488,6 +495,37 @@ struct ProjectExportView: View {
     }
     
     // MARK: - Subviews
+    
+    private var duplicateWarningBanner: some View {
+        HStack {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(.yellow)
+                .font(.title2)
+            
+            VStack(alignment: .leading) {
+                Text("Warning: Duplicate VFX Names Detected")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                Text("Found \(duplicateVFXNames.count) names used multiple times.")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+            
+            Spacer()
+            
+            Button {
+                withAnimation { showOnlyDuplicates.toggle() }
+            } label: {
+                Text(showOnlyDuplicates ? "Show All Clips" : "Filter Duplicates")
+                    .fontWeight(.semibold)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(showOnlyDuplicates ? .blue : .red)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(Color.red.opacity(0.1))
+    }
     
     @ViewBuilder
     private func defaultHeaderView(project: Project) -> some View {
@@ -983,9 +1021,26 @@ struct ProjectExportView: View {
     private func countClipsForScenePrefix(prefix: String, clips: [ClipData]) -> Int {
         return clips.filter { $0.vfxName.hasPrefix(prefix + "_") || $0.vfxName == prefix }.count
     }
+    
+    private var duplicateVFXNames: [String] {
+        let names = projectManager.currentMasterList.map { $0.vfxName }.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0 != "—" }
+        var nameCounts: [String: Int] = [:]
+        for name in names {
+            nameCounts[name, default: 0] += 1
+        }
+        return nameCounts.filter { $0.value > 1 }.map { $0.key }.sorted()
+    }
 
     private func getFilteredIndices(clips: [ClipData]) -> [Int] {
         var indices = Array(clips.indices)
+        
+        if showOnlyDuplicates {
+            let dupeNames = duplicateVFXNames
+            indices = indices.filter { i in
+                let name = clips[i].vfxName
+                return dupeNames.contains(name)
+            }
+        }
         
         if let prefix = selectedScenePrefix {
             indices = indices.filter { i in
