@@ -912,6 +912,22 @@ struct ProjectExportView: View {
         getFilteredIndices(clips: projectManager.currentMasterList)
     }
     
+    private func jumpToResolveTimecode(_ tc: String) {
+        let jsonStr = "{\"tc\": \"\(tc)\"}"
+        let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+        try? jsonStr.write(to: tmpURL, atomically: true, encoding: .utf8)
+        
+        PyScriptRunner.run(scriptName: "Resolve/Tools/navigate_to_frame", args: [tmpURL.path], showOutput: false) { _ in
+            try? FileManager.default.removeItem(at: tmpURL)
+        }
+        
+        let script = "tell application \"DaVinci Resolve\" to activate"
+        var error: NSDictionary?
+        if let appleScript = NSAppleScript(source: script) {
+            appleScript.executeAndReturnError(&error)
+        }
+    }
+    
     @ViewBuilder
     private func filteredDataRows() -> some View {
         let indices = filteredIndicesCache
@@ -975,19 +991,41 @@ struct ProjectExportView: View {
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                         } else {
-                            Text(clipBinding.wrappedValue.dict[col] ?? "")
-                                .lineLimit(1)
-                                .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
-                                .fixedSize(horizontal: false, vertical: true)
+                            if col == "VFX Name", !isEditingMasterlist {
+                                HStack(spacing: 4) {
+                                    if let tc = clipBinding.wrappedValue.dict["TC In"], !tc.isEmpty {
+                                        Button {
+                                            jumpToResolveTimecode(tc)
+                                        } label: {
+                                            Image(systemName: "arrow.right.circle.fill")
+                                                .foregroundColor(.accentColor)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .help("Jump to this clip in DaVinci Resolve")
+                                    }
+                                    
+                                    Text(clipBinding.wrappedValue.dict[col] ?? "")
+                                        .lineLimit(1)
+                                        .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
                                 .padding(.horizontal, 4)
                                 .contentShape(Rectangle())
-                                .onTapGesture {
-                                    if isEditingMasterlist {
-                                        editingCell = cellId
-                                        focusedField = cellId
+                            } else {
+                                Text(clipBinding.wrappedValue.dict[col] ?? "")
+                                    .lineLimit(1)
+                                    .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .padding(.horizontal, 4)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        if isEditingMasterlist {
+                                            editingCell = cellId
+                                            focusedField = cellId
+                                        }
                                     }
-                                }
-                                .background(isEditingMasterlist && editingCell == cellId ? Color.accentColor.opacity(0.1) : Color.clear)
+                                    .background(isEditingMasterlist && editingCell == cellId ? Color.accentColor.opacity(0.1) : Color.clear)
+                            }
                         }
                     }
                     .frame(width: columnWidth(for: col), alignment: .leading)

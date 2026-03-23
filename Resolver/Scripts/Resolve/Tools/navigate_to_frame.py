@@ -24,6 +24,7 @@ try:
         sys.exit(1)
 
     target_frame = int(data.get("frame", 0))
+    target_tc = data.get("tc")
 
     # === Helpers ===
     def frames_to_tc(frames, fps):
@@ -75,11 +76,23 @@ try:
 
     # === Navigate ===
     # === Navigate ===
+    # === Navigate ===
     try:
         navigated = False
         
+        # Method 0: SetCurrentTimecode directly if exact TC provided
+        if target_tc and hasattr(timeline, "SetCurrentTimecode"):
+            method = getattr(timeline, "SetCurrentTimecode")
+            if callable(method):
+                try:
+                    method(target_tc)
+                    print(json.dumps({"status": "success", "message": f"Moved to exact TC {target_tc} using SetCurrentTimecode"}))
+                    navigated = True
+                except Exception as e:
+                    print(json.dumps({"status": "debug", "message": f"SetCurrentTimecode direct failed: {str(e)}"}))
+        
         # Method 1: SetCurrentTime (Frames)
-        if hasattr(timeline, "SetCurrentTime"):
+        if not navigated and target_frame > 0 and hasattr(timeline, "SetCurrentTime"):
             method = getattr(timeline, "SetCurrentTime")
             if callable(method):
                 try:
@@ -89,8 +102,8 @@ try:
                 except Exception as e:
                     print(json.dumps({"status": "debug", "message": f"SetCurrentTime failed: {str(e)}"}))
         
-        if not navigated:
-            # Method 2: SetCurrentTimecode
+        if not navigated and target_frame > 0:
+            # Method 2: SetCurrentTimecode fallback via conversion
             fps = float(timeline.GetSetting("timelineFrameRate"))
             tc = frames_to_tc(target_frame, fps)
             
@@ -98,12 +111,15 @@ try:
                 method = getattr(timeline, "SetCurrentTimecode")
                 if callable(method):
                     method(tc)
-                    print(json.dumps({"status": "success", "message": f"Moved to TC {tc} using SetCurrentTimecode"}))
+                    print(json.dumps({"status": "success", "message": f"Moved to TC {tc} using SetCurrentTimecode fallback"}))
                     navigated = True
                 else:
                     print(json.dumps({"status": "error", "message": "SetCurrentTimecode is not callable"}))
             else:
                  print(json.dumps({"status": "error", "message": "No navigation method found on timeline"}))
+                 
+        if not target_frame and not target_tc:
+            print(json.dumps({"status": "error", "message": "No valid frame or tc provided in JSON payload."}))
 
     except Exception as e:
         print(json.dumps({"status": "error", "message": f"Navigation failed: {str(e)}"}))
