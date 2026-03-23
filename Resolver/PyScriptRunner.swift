@@ -96,7 +96,11 @@ class PyScriptRunner {
                         let data = handle.availableData
                         if !data.isEmpty {
                             fullOutput.append(data)
-                            logHandle?.write(data)
+                            do {
+                                try logHandle?.write(contentsOf: data)
+                            } catch {
+                                print("FileHandle write error safely ignored: \(error)")
+                            }
                             
                             // Parse Progress & Log
                             if let str = String(data: data, encoding: .utf8) {

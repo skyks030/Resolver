@@ -917,9 +917,9 @@ struct ProjectExportView: View {
         let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
         try? jsonStr.write(to: tmpURL, atomically: true, encoding: .utf8)
         
-        PyScriptRunner.run(scriptName: "Resolve/Tools/navigate_to_frame", args: [tmpURL.path], showOutput: false) { _ in
+        PyScriptRunner.run(scriptName: "Resolve/Tools/navigate_to_frame", args: [tmpURL.path], showOutput: false, completion: { _ in
             try? FileManager.default.removeItem(at: tmpURL)
-        }
+        })
         
         let script = "tell application \"DaVinci Resolve\" to activate"
         var error: NSDictionary?

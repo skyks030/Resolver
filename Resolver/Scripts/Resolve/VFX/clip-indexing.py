@@ -81,7 +81,7 @@ try:
 
     # === Input Argumente ===
     target_track_index = int(sys.argv[1]) if len(sys.argv) > 1 else 1
-    output_file_path = os.environ.get("RESOLVER_OUTPUT_FILE")
+    output_file_path = os.environ.get("RESOLVER_TMP_OUT")
     
     # Check for end marker flag (default: False)
     vfx_end_marker_enabled = False
