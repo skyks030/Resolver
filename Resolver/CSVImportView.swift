@@ -424,10 +424,16 @@ struct CSVImportView: View {
         let rawHeader = rawRows[headerRowIndex]
         columnIncludes = Array(repeating: true, count: rawHeader.count)
         
+        let autoMap: [String: String] = [
+            "Rec TC In": "TC In",
+            "Rec TC Out": "TC Out"
+        ]
+        
         var newHeaders: [String] = []
         for i in 0..<rawHeader.count {
             let clean = rawHeader[i].trimmingCharacters(in: .whitespacesAndNewlines)
-            newHeaders.append(clean.isEmpty ? "Column \(i+1)" : clean)
+            let mapped = autoMap[clean] ?? clean
+            newHeaders.append(mapped.isEmpty ? "Column \(i+1)" : mapped)
         }
         renamedHeaders = newHeaders
         

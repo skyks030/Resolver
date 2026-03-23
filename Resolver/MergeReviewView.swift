@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MergeReviewView: View {
     @Binding var mergeItems: [MergeItem]
+    @Binding var mergeKey: MergeKeyOption
     let onConfirm: () -> Void
     let onCancel: () -> Void
     
@@ -44,6 +45,19 @@ struct MergeReviewView: View {
                 .frame(width: 300)
                 
                 Spacer()
+                
+                HStack {
+                    Text("Merge Key:")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Picker("", selection: $mergeKey) {
+                        ForEach(MergeKeyOption.allCases, id: \.self) { option in
+                            Text(option.rawValue).tag(option)
+                        }
+                    }
+                    .pickerStyle(MenuPickerStyle())
+                    .frame(width: 180)
+                }
                 
                 Button("Select All Visible") {
                     for i in mergeItems.indices {

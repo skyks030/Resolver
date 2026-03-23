@@ -35,6 +35,10 @@ struct ResolverApp: App {
             DoubleClipsView()
         }
         
+        Window("Debug Console", id: "debug-console") {
+            DebugConsoleView()
+        }
+        
         
         Window("Marker Manager", id: "marker-tool") {
             MarkerToolView()

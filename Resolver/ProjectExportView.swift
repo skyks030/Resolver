@@ -33,7 +33,9 @@ struct ProjectExportView: View {
     
     @State private var showMergeReview = false
     @State private var pendingMergeItems: [MergeItem] = []
+    @State private var pendingImportedClips: [ClipData] = []
     @State private var pendingSceneMarkers: [MarkerData] = []
+    @State private var currentMergeKey: MergeKeyOption = .clipName
     
     // Scene Manager & Generator States
     @State private var showSceneManager = false
@@ -45,8 +47,6 @@ struct ProjectExportView: View {
     @State private var showThumbnailImport = false
     @State private var showImportDataSheet = false
     @State private var showExportDataSheet = false
-    @State private var showSceneImportResult = false
-    @State private var sceneImportResultMessage = ""
     
     @State private var isEditingMasterlist = false
     @State private var selectedForDelete: Set<UUID> = []
@@ -81,6 +81,14 @@ struct ProjectExportView: View {
         for col in available {
             if !cols.contains(col) { cols.append(col) }
         }
+        
+        // Fix VFX Name, Clip Name, and TC columns at the beginning
+        let fixedCols = ["VFX Name", "Clip Name", "TC In", "TC Out", "Source TC In", "Source TC Out"]
+        cols.removeAll(where: { fixedCols.contains($0) })
+        
+        // Add them back at the very front
+        cols.insert(contentsOf: fixedCols, at: 0)
+        
         return cols
     }
     
@@ -135,7 +143,9 @@ struct ProjectExportView: View {
                                 if customCols.isEmpty {
                                     Text("No custom columns").foregroundColor(.secondary)
                                 }
-                                ForEach(customCols, id: \.self) { col in
+                                let fixedCols = ["VFX Name", "Clip Name", "TC In", "TC Out", "Source TC In", "Source TC Out"]
+                                let toggleCols = customCols.filter { !fixedCols.contains($0) }
+                                ForEach(toggleCols, id: \.self) { col in
                                     Toggle(col, isOn: Binding(
                                         get: { customColumnVisibility[col] ?? true },
                                         set: { customColumnVisibility[col] = $0 }
@@ -263,19 +273,6 @@ struct ProjectExportView: View {
                         }
                     }
                 },
-                onSceneMarkersImport: {
-                    showImportDataSheet = false
-                    DaVinciChecker.performPreflightCheck { diag in
-                        if let diag = diag, diag.success {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                importScenesFromDaVinci()
-                            }
-                        } else {
-                            showIndexingError = true
-                            indexingErrorMessage = diag != nil ? DaVinciChecker.formatError(diagnostic: diag!) : "DaVinci Check Failed"
-                        }
-                    }
-                },
                 onCSVImport: {
                     showImportDataSheet = false
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { showCSVImport = true }
@@ -376,9 +373,6 @@ struct ProjectExportView: View {
         .alert("DaVinci Resolve Info", isPresented: $showIndexingWarning) {
             Button("OK", role: .cancel) { }
         } message: { Text(indexingWarningMessage) }
-        .alert("Scene Markers Import", isPresented: $showSceneImportResult) {
-            Button("OK", role: .cancel) { }
-        } message: { Text(sceneImportResultMessage) }
         
         // CSV Selection Sheet
         .fileImporter(isPresented: $showCSVImport, allowedContentTypes: [.commaSeparatedText]) { result in
@@ -403,7 +397,7 @@ struct ProjectExportView: View {
         
         // Merge Review Sheet (remains a sheet for consistency)
         .sheet(isPresented: $showMergeReview) {
-            MergeReviewView(mergeItems: $pendingMergeItems) {
+            MergeReviewView(mergeItems: $pendingMergeItems, mergeKey: $currentMergeKey) {
                 // Confirm
                 var newMaster = projectManager.currentMasterList
                 MergeManager.applyMerge(master: &newMaster, mergeItems: pendingMergeItems)
@@ -418,6 +412,9 @@ struct ProjectExportView: View {
                 showMergeReview = false
             } onCancel: {
                 showMergeReview = false
+            }
+            .onChange(of: currentMergeKey) { newKey in
+                pendingMergeItems = MergeManager.compare(master: projectManager.currentMasterList, imported: pendingImportedClips, mergeKey: newKey)
             }
         }
         
@@ -585,10 +582,7 @@ struct ProjectExportView: View {
                     .fixedSize()
                     
                     Menu {
-                        Button("Show Color Groups") {
-                            isProcessing = true
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { isProcessing = false }
-                        }
+                        Button("Create Color Groups") { performPreflightAndRunBatchOp(type: "groups", action: "create", project: project) }
                         Button("Delete Color Groups", role: .destructive) {
                             DaVinciChecker.performPreflightCheck { diag in
                                 if let diag = diag, diag.success {
@@ -645,8 +639,17 @@ struct ProjectExportView: View {
                 .buttonStyle(.bordered)
                 
                 Button(action: {
-                    var initialDict: [String: String] = ["vfxName": "New Shot"]
-                    for col in availableCustomColumns { initialDict[col] = "" }
+                    var initialDict: [String: String] = [
+                        "VFX Name": "New Shot",
+                        "Clip Name": "",
+                        "TC In": "",
+                        "TC Out": "",
+                        "Source TC In": "",
+                        "Source TC Out": ""
+                    ]
+                    for col in availableCustomColumns { 
+                        if initialDict[col] == nil { initialDict[col] = "" }
+                    }
                     let newClip = ClipData(dict: initialDict)
                     projectManager.currentMasterList.append(newClip)
                     projectManager.saveMasterList() // so it persists instantly
@@ -758,8 +761,11 @@ struct ProjectExportView: View {
                 let cols = activeColumns.filter { customColumnVisibility[$0] ?? true }
                 ForEach(cols.indices, id: \.self) { i in
                     let col = cols[i]
+                    let fixedCols = ["VFX Name", "Clip Name", "TC In", "TC Out", "Source TC In", "Source TC Out"]
+                    let isFixed = fixedCols.contains(col)
+                    
                     HStack(spacing: 4) {
-                        if isEditingMasterlist {
+                        if isEditingMasterlist && !isFixed {
                             // Drag grip handle
                             Image(systemName: "line.3.horizontal")
                                 .font(.system(size: 12))
@@ -803,7 +809,7 @@ struct ProjectExportView: View {
                             }
                         }
                             
-                        if isEditingMasterlist {
+                        if isEditingMasterlist && !isFixed {
                             Button(action: {
                                 columnToDelete = col
                                 showDeleteColumnAlert = true
@@ -813,7 +819,8 @@ struct ProjectExportView: View {
                             .buttonStyle(.plain)
                         }
                     }
-                    .onDrop(of: [.plainText], delegate: ColumnDropDelegate(item: col, items: $columnOrder, draggedItem: $draggedColumn, onReorder: {}))
+                    // Disable drop target for fixed columns
+                    .onDrop(of: isFixed ? [] : [.plainText], delegate: ColumnDropDelegate(item: col, items: $columnOrder, draggedItem: $draggedColumn, activeColumns: cols, onReorder: {}))
                     .frame(width: columnWidth(for: col), alignment: .leading)
                     .padding(.horizontal, 4)
                     .overlay(
@@ -1042,7 +1049,8 @@ struct ProjectExportView: View {
         guard let project = projectManager.currentProject else { return }
         let preprocessed = projectManager.prepareImportedClips(importedClips, projectId: project.id)
         
-        self.pendingMergeItems = MergeManager.compare(master: projectManager.currentMasterList, imported: preprocessed)
+        self.pendingImportedClips = preprocessed
+        self.pendingMergeItems = MergeManager.compare(master: projectManager.currentMasterList, imported: preprocessed, mergeKey: currentMergeKey)
         self.pendingSceneMarkers = markers
         self.showMergeReview = true
     }
@@ -1085,59 +1093,15 @@ struct ProjectExportView: View {
                 self.loadingMessage = ""
                 guard let output = output else { return }
                 
-                var jsonString = output
-                if let start = output.firstIndex(of: "{"), let end = output.lastIndex(of: "}") {
-                    if start <= end { jsonString = String(output[start...end]) }
-                }
-                
-                guard let data = jsonString.data(using: .utf8) else { return }
+                // Write CSV output to a temporary file
                 do {
-                    struct IncomingRunData: Decodable {
-                        let clips: [IncomingClipData]
-                        let sceneMarkers: [IncomingMarkerData]
-                        let warning: String?
-                    }
-                    struct IncomingClipData: Decodable {
-                        let vfxName, tcIn, tcOut, sourceTcIn, sourceTcOut, fileNames, reelName: String
-                        let frameStart, frameEnd, duration: Int?
-                        let uniqueId: String?
-                    }
-                    struct IncomingMarkerData: Decodable {
-                        let frameId: Int
-                        let color, name, note: String
-                        let duration: Int
-                    }
+                    let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent("davinci_import.csv")
+                    try output.write(to: tmpURL, atomically: true, encoding: .utf8)
                     
-                    let runData = try JSONDecoder().decode(IncomingRunData.self, from: data)
-                    
-                    if let warning = runData.warning, !warning.isEmpty {
-                        self.indexingWarningMessage = warning
-                        self.showIndexingWarning = true
+                    // Launch CSV Import Window
+                    CSVImportView.showStandalone(url: tmpURL) { importedClips in
+                        self.startMergeReview(importedClips: importedClips, markers: [])
                     }
-                    
-                    let clips = runData.clips.map { raw in
-                        ClipData(
-                            id: UUID(),
-                            vfxName: raw.vfxName,
-                            tcIn: raw.tcIn,
-                            tcOut: raw.tcOut,
-                            sourceTcIn: raw.sourceTcIn,
-                            sourceTcOut: raw.sourceTcOut,
-                            fileNames: raw.fileNames,
-                            reelName: raw.reelName,
-                            frameStart: raw.frameStart,
-                            frameEnd: raw.frameEnd,
-                            duration: raw.duration,
-                            originalVfxName: nil,
-                            uniqueId: raw.uniqueId
-                        )
-                    }
-                    let markers = runData.sceneMarkers.map { raw in
-                        MarkerData(frameId: raw.frameId, color: raw.color, name: raw.name, note: raw.note, duration: raw.duration)
-                    }
-                    
-                    // Instead of resolving right away, pass them to MergeReview
-                    self.startMergeReview(importedClips: clips, markers: markers)
                 } catch {
                     self.indexingErrorMessage = "Failed to process indexing data: \(error.localizedDescription)"
                     self.showIndexingError = true
@@ -1159,32 +1123,50 @@ struct ProjectExportView: View {
     }
     
     private func performBatchOp(type: String, action: String, project: Project) {
+        var actionToRun = action
         // Omited for brevity/reusability. You will need to rewrite the body slightly to use `project.sceneMarkers` instead of `run.sceneMarkers` and `projectManager.currentMasterList` instead of `run.clips`.
         var markers: [MarkerData] = []
         let clips = projectManager.currentMasterList
         
         if type == "scene" {
-            markers = project.sceneMarkers ?? []
-            if markers.isEmpty { return }
+            let scenes = projectManager.currentScenes
+            if scenes.isEmpty { return }
+            markers = scenes.map { scene in
+                MarkerData(frameId: 0, color: "Cream", name: scene.name, note: "Resolver-Scene-Marker", duration: 1, tc: scene.startTC)
+            }
         } else if type == "vfx" {
-            for clip in clips {
-                guard let start = clip.frameStart, let end = clip.frameEnd else { continue }
-                markers.append(MarkerData(frameId: start, color: "Green", name: clip.vfxName, note: "Resolver-Vfx-Marker", duration: 1))
-                if project.vfxEndMarkerEnabled == true {
-                    markers.append(MarkerData(frameId: end - 1, color: "Red", name: clip.vfxName, note: "Resolver-Vfx-Marker", duration: 1))
+            if action == "delete" {
+                // Deletion will now be handled inside the script by scanning all markers for "Resolver VFX-Marker"
+                actionToRun = "delete_all_vfx"
+            } else {
+                for clip in clips {
+                    let tc = clip.tcIn
+                    if tc.isEmpty { continue }
+                    markers.append(MarkerData(frameId: 0, color: "Green", name: clip.vfxName, note: "Resolver VFX-Marker", duration: 1, tc: tc))
                 }
+            }
+        } else if type == "groups" {
+            // For groups, we pass the vfxName, tcIn, and tcOut using MarkerData structure as a generic transport
+            for clip in clips {
+                if clip.tcIn.isEmpty || clip.tcOut.isEmpty { continue }
+                markers.append(MarkerData(frameId: 0, color: "Group", name: clip.vfxName, note: clip.tcOut, duration: 1, tc: clip.tcIn))
             }
         }
         
         struct BatchPayload: Codable { let action: String; let markers: [MarkerData] }
-        let payload = BatchPayload(action: action, markers: markers)
+        let payload = BatchPayload(action: actionToRun, markers: markers)
         
         do {
             let data = try JSONEncoder().encode(payload)
             let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent("resolver_batch_ops.json")
             try data.write(to: tmpURL)
-            PyScriptRunner.run(scriptName: "Resolve/Tools/batch_marker_op", args: [tmpURL.path], showOutput: false, enableDownload: false, completion: { _ in })
-        } catch { print("Batch Op Error: \(error)") }
+            
+            if type == "groups" {
+                PyScriptRunner.run(scriptName: "Resolve/VFX/clip-grouping", args: [tmpURL.path], showOutput: false, enableDownload: false, completion: { _ in })
+            } else {
+                PyScriptRunner.run(scriptName: "Resolve/Tools/batch_marker_op", args: [tmpURL.path], showOutput: false, enableDownload: false, completion: { _ in })
+            }
+        } catch { ConsoleLogger.shared.log("Batch Op Error: \(error)") }
     }
     
     private func generateThumbnails(project: Project) {
@@ -1227,75 +1209,6 @@ struct ProjectExportView: View {
     
     // MARK: - Scene Marker Import from DaVinci
     
-    private func importScenesFromDaVinci() {
-        isProcessing = true
-        indexingWarningMessage = "Importing Scene Markers from DaVinci Resolve..."
-        showIndexingWarning = true
-        
-        PyScriptRunner.run(
-            scriptName: "Resolve/VFX/export-scene-markers",
-            showOutput: false,
-            onProgress: { _ in }
-        ) { result in
-            DispatchQueue.main.async {
-                self.isProcessing = false
-                self.showIndexingWarning = false
-                
-                // Parse sentinel-wrapped CSV block
-                let output = result ?? ""
-                let lines = output.components(separatedBy: .newlines)
-                var inBlock = false
-                var parsed: [SceneData] = []
-                var isHeader = true
-                
-                for line in lines {
-                    let trimmed = line.trimmingCharacters(in: .whitespaces)
-                    if trimmed == "SCENES_CSV_START" { inBlock = true; continue }
-                    if trimmed == "SCENES_CSV_END" { inBlock = false; continue }
-                    if inBlock {
-                        if isHeader { isHeader = false; continue } // skip "name,startTC" header
-                        let parts = trimmed.components(separatedBy: ",")
-                        if parts.count >= 2 {
-                            let name = parts[0].trimmingCharacters(in: .whitespaces)
-                            let tc = parts[1].trimmingCharacters(in: .whitespaces)
-                            if !name.isEmpty && !tc.isEmpty {
-                                parsed.append(SceneData(name: name, startTC: tc))
-                            }
-                        }
-                    }
-                }
-                
-                if parsed.isEmpty {
-                    if output.contains("ERROR:") {
-                        let msg = lines.first(where: { $0.hasPrefix("ERROR:") }) ?? "Unknown error"
-                        self.indexingErrorMessage = msg
-                        self.showIndexingError = true
-                    } else {
-                        self.sceneImportResultMessage = "No Cream scene markers found on the current timeline."
-                        self.showSceneImportResult = true
-                    }
-                    return
-                }
-                
-                // Merge: keep existing scenes, add new ones that don't overlap by name
-                var existing = self.projectManager.currentScenes
-                var added = 0
-                for newScene in parsed {
-                    if !existing.contains(where: { $0.name == newScene.name }) {
-                        existing.append(newScene)
-                        added += 1
-                    }
-                }
-                existing.sort { $0.startTC < $1.startTC }
-                self.projectManager.currentScenes = existing
-                self.projectManager.saveScenes()
-                
-                self.sceneImportResultMessage = "✅ Imported \(added) new scene(s) from DaVinci Resolve. \(parsed.count - added) already existed and were skipped."
-                self.showSceneImportResult = true
-            }
-        }
-    }
-
     private func hasThumbnails() -> Bool {
         guard let project = projectManager.currentProject,
               let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return false }
@@ -1363,14 +1276,21 @@ struct ColumnDropDelegate: DropDelegate {
     let item: String
     @Binding var items: [String]
     @Binding var draggedItem: String?
+    let activeColumns: [String]
     let onReorder: () -> Void
 
     func dropEntered(info: DropInfo) {
         guard let draggedItem, draggedItem != item,
-              let from = items.firstIndex(of: draggedItem),
-              let to = items.firstIndex(of: item) else { return }
+              let from = items.firstIndex(of: draggedItem) else { return }
 
-        if items[to] != draggedItem {
+        let fixedCols = ["VFX Name", "Clip Name", "TC In", "TC Out", "Source TC In", "Source TC Out"]
+        
+        // Protect fixed columns
+        if fixedCols.contains(draggedItem) { return }
+        if fixedCols.contains(item) { return }
+
+        // Since UI maps over activeColumns, 'item' is the target column name
+        if let to = items.firstIndex(of: item), items[to] != draggedItem {
             withAnimation(.default) {
                 items.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
             }

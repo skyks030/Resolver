@@ -6,6 +6,13 @@ enum MergeState: String, Codable {
     case new
 }
 
+enum MergeKeyOption: String, CaseIterable {
+    case clipName = "Clip Name"
+    case startTC = "Start TC / Timeline In"
+    case sourceIn = "Source In"
+    case uniqueId = "DaVinci Unique ID"
+}
+
 struct MergeItem: Codable, Identifiable {
     var id: UUID = UUID()
     var masterClip: ClipData?
@@ -15,49 +22,48 @@ struct MergeItem: Codable, Identifiable {
 }
 
 class MergeManager {
-    static func compare(master: [ClipData], imported: [ClipData]) -> [MergeItem] {
+    static func compare(master: [ClipData], imported: [ClipData], mergeKey: MergeKeyOption = .clipName) -> [MergeItem] {
         var results: [MergeItem] = []
         
-        // Build lookup maps for Master list
-        var masterById: [String: ClipData] = [:]
-        var masterByName: [String: ClipData] = [:]
-        var masterByFileAndReel: [String: ClipData] = [:]
+        // Build lookup maps for Master list based on selected mergeKey
+        var masterMap: [String: ClipData] = [:]
         
         for clip in master {
-            if let uid = clip.uniqueId, !uid.isEmpty {
-                masterById[uid] = clip
-            }
-            let nameKey = clip.originalVfxName ?? clip.vfxName
-            if !nameKey.isEmpty {
-                masterByName[nameKey] = clip
+            let key: String
+            switch mergeKey {
+            case .clipName:
+                key = clip.originalVfxName ?? clip.vfxName
+            case .startTC:
+                key = clip.tcIn
+            case .sourceIn:
+                key = clip.sourceTcIn
+            case .uniqueId:
+                key = clip.uniqueId ?? ""
             }
             
-            let fileReelKey = "\(clip.fileNames)|\(clip.reelName)"
-            if !clip.fileNames.isEmpty || !clip.reelName.isEmpty {
-                masterByFileAndReel[fileReelKey] = clip
+            if !key.isEmpty {
+                masterMap[key] = clip
             }
         }
         
         for imp in imported {
             var matchedMaster: ClipData?
             
-            // 1. Try resolving by DaVinci Unique ID
-            if let uid = imp.uniqueId, !uid.isEmpty, let match = masterById[uid] {
+            let searchKey: String
+            switch mergeKey {
+            case .clipName:
+                // When we import CSV, the raw Clip Name typically maps to vfxName temporarily
+                searchKey = imp.originalVfxName ?? imp.vfxName
+            case .startTC:
+                searchKey = imp.tcIn
+            case .sourceIn:
+                searchKey = imp.sourceTcIn
+            case .uniqueId:
+                searchKey = imp.uniqueId ?? ""
+            }
+            
+            if !searchKey.isEmpty, let match = masterMap[searchKey] {
                 matchedMaster = match
-            } 
-            // 2. Try resolving by VFX Name
-            else {
-                let nameKey = imp.originalVfxName ?? imp.vfxName
-                if !nameKey.isEmpty, let match = masterByName[nameKey] {
-                    matchedMaster = match
-                }
-                // 3. Try resolving by File and Reel matching exactly
-                else {
-                    let fileReelKey = "\(imp.fileNames)|\(imp.reelName)"
-                    if (!imp.fileNames.isEmpty || !imp.reelName.isEmpty), let match = masterByFileAndReel[fileReelKey] {
-                        matchedMaster = match
-                    }
-                }
             }
             
             if let masterClip = matchedMaster {

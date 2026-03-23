@@ -273,28 +273,48 @@ struct VfxNameGeneratorView: View {
     }
 
     private func generateNames() {
+        ConsoleLogger.shared.log("Starting VFX Name Generation...")
         noScenesWarning = projectManager.currentScenes.isEmpty
-        if noScenesWarning { return }
+        if noScenesWarning {
+            ConsoleLogger.shared.log("ERROR: No scenes found in project. Aborting.")
+            return
+        }
 
         var sceneCounters: [String: Int] = [:]
         var generated = 0
+        
+        // Ensure clips are sorted chronologically by their Record TC In
+        let sortedIndices = projectManager.currentMasterList.indices.sorted { idx1, idx2 in
+            let tc1 = projectManager.currentMasterList[idx1].tcIn
+            let tc2 = projectManager.currentMasterList[idx2].tcIn
+            return tc1 < tc2
+        }
 
-        for i in 0..<projectManager.currentMasterList.count {
-            let tc = projectManager.currentMasterList[i].dict["Record TC"] ?? ""
+        for i in sortedIndices {
+            let tc = projectManager.currentMasterList[i].tcIn
+            if tc.isEmpty { continue }
+            
             if let sceneName = getScene(for: tc) {
                 let currentCount = sceneCounters[sceneName] ?? counterStart
                 let newName = buildName(sceneName: sceneName, counter: currentCount)
+                
+                ConsoleLogger.shared.log("Clip [\(tc)] in Scene \(sceneName) -> Assigning VFX Name: \(newName)")
                 projectManager.currentMasterList[i].vfxName = newName
                 sceneCounters[sceneName] = currentCount + counterStep
                 generated += 1
+            } else {
+                ConsoleLogger.shared.log("WARNING: Clip [\(tc)] did not match any registered Scene. Skipping.")
             }
         }
 
         if generated > 0 {
+            ConsoleLogger.shared.log("Successfully generated \(generated) VFX Names!")
             projectManager.saveMasterList()
             generatedCount = generated
             showSuccess = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { dismiss() }
+        } else {
+            ConsoleLogger.shared.log("No VFX Names were generated. Please check your tracking data.")
         }
     }
 }

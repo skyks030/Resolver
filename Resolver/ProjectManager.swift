@@ -113,10 +113,11 @@ struct MarkerData: Codable, Identifiable {
     let name: String
     let note: String
     let duration: Int
+    var tc: String?
     
     // Check CodingKeys to exclude ID from JSON requirement
     private enum CodingKeys: String, CodingKey {
-        case frameId, color, name, note, duration
+        case frameId, color, name, note, duration, tc
     }
 }
 
@@ -226,9 +227,12 @@ class ProjectManager: ObservableObject {
         // Auto-populate default columns
         let defaultDict = [
             "VFX Name": "New Shot",
-            "Duration": "",
             "Clip Name": "",
-            "Record TC": ""
+            "TC In": "",
+            "TC Out": "",
+            "Source TC In": "",
+            "Source TC Out": "",
+            "Duration": ""
         ]
         currentMasterList = [ClipData(dict: defaultDict)]
         saveMasterList() // so it persists

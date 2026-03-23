@@ -4,151 +4,105 @@ import sys
 import os
 import importlib.util
 import json
-import traceback
 
-# === Pfad zur DaVinci Resolve Scripting API (macOS) ===
-sdk_path = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules"
-sdk_file = os.path.join(sdk_path, "DaVinciResolveScript.py")
-
-# === API laden ===
-if not os.path.exists(sdk_file):
-    print(f"❌ SDK-Datei nicht gefunden: {sdk_file}")
+if len(sys.argv) < 2:
+    print(json.dumps({"error": "Missing JSON input file path"}))
     sys.exit(1)
 
-spec = importlib.util.spec_from_file_location("DaVinciResolveScript", sdk_file)
-dvr = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(dvr)
+json_path = sys.argv[1]
 
-import DaVinciResolveScript as dvr
-resolve = dvr.scriptapp("Resolve")
-if not resolve:
-    print("❌ Verbindung zu DaVinci Resolve konnte nicht hergestellt werden.")
+if not os.path.exists(json_path):
+    print(json.dumps({"error": f"JSON file not found: {json_path}"}))
     sys.exit(1)
 
-# === Projekt & Timeline ===
-pm = resolve.GetProjectManager()
-project = pm.GetCurrentProject()
-timeline = project.GetCurrentTimeline()
-
-if not project or not timeline:
-    print("❌ Kein Projekt oder keine Timeline geöffnet.")
+try:
+    with open(json_path, 'r') as f:
+        data = json.load(f)
+except Exception as e:
+    print(json.dumps({"error": f"Failed to parse JSON: {e}"}))
     sys.exit(1)
 
-# === Clips auf Videospur analysieren ===
-target_track_index = int(sys.argv[1]) if len(sys.argv) > 1 else 1
-print(f"🔍 Analysiere Clips auf Videospur: {target_track_index}")
+markers = data.get("markers", [])
+if not markers:
+    print(json.dumps({"status": "error", "message": "No clips provided in JSON payload."}))
+    sys.exit(0)
 
-vfx_clips = timeline.GetItemListInTrack("video", target_track_index)
-if not vfx_clips:
-    print(f"❌ Keine Clips auf Videospur {target_track_index} gefunden.")
-    sys.exit(1)
+try:
+    # === Resolve API Setup ===
+    sdk_path = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules"
+    sdk_file = os.path.join(sdk_path, "DaVinciResolveScript.py")
 
-# === JSON Map laden & Index-Driven Logic ===
-json_clips = []
-if len(sys.argv) > 2:
-    json_path = sys.argv[2]
-    if os.path.exists(json_path):
-        try:
-            with open(json_path, 'r') as f:
-                json_clips = json.load(f)
-            print(f"✅ Loaded {len(json_clips)} clips from Index.")
-        except Exception as e:
-            print(f"⚠️ Failed to load JSON Index: {e}")
+    spec = importlib.util.spec_from_file_location("DaVinciResolveScript", sdk_file)
+    dvr = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dvr)
 
-# === Build Timeline Lookup Maps ===
-# We need to find the clips on the timeline that correspond to the Index.
-# We scan the target track once.
-timeline_uid_map = {}
-timeline_frame_map = {} # Fallback
+    import DaVinciResolveScript as dvr
+    resolve = dvr.scriptapp("Resolve")
+    
+    if not resolve:
+        raise Exception("Could not connect to DaVinci Resolve")
 
-for item in vfx_clips:
-    try:
-        uid = item.GetUniqueId()
-        if uid:
-            timeline_uid_map[uid] = item
-        
-        start_frame = int(item.GetStart())
-        timeline_frame_map[start_frame] = item
-    except:
-        pass
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+         raise Exception("No active project")
+         
+    timeline = project.GetCurrentTimeline()
+    if not timeline:
+        raise Exception("No active timeline")
 
-# === CSV Header ===
-print(f"GroupName,Clips-Count")
-sys.stdout.flush()
+    start_frame = int(timeline.GetStartFrame())
+    start_tc = timeline.GetStartTimecode() if hasattr(timeline, 'GetStartTimecode') else "01:00:00:00"
+    fps_raw = timeline.GetSetting("timelineFrameRate")
+    fps = float(fps_raw) if fps_raw else 25.0
+    
+    def tc_to_frames(target_tc_str, fps_val):
+        parts = target_tc_str.replace(';', ':').split(':')
+        if len(parts) >= 4:
+            sh, sm, ss, sf = map(int, parts[:4])
+            return int((sh * 3600 + sm * 60 + ss) * fps_val + sf)
+        return 0
 
-# === Hauptschleife ===
-# Fallback: If no JSON, iterate timeline clips (Legacy Mode)
-items_to_process = []
-
-if json_clips:
-    print(json.dumps({"status": "starting", "count": len(json_clips), "mode": "index-driven"}))
-    items_to_process = json_clips
-else:
-    print(json.dumps({"status": "starting", "count": len(vfx_clips), "mode": "legacy-timeline"}))
-    # Create pseudo-objects for legacy mode
-    for item in vfx_clips:
-        items_to_process.append({
-            "uniqueId": item.GetUniqueId(),
-            "vfxName": item.GetName(),
-            "frameStart": int(item.GetStart()),
-            "_legacy_item": item 
-        })
-
-sys.stdout.flush()
-
-processed_count = 0
-total_clips = len(items_to_process)
-track_count = timeline.GetTrackCount("video")
-
-# === OPTIMIZATION: Cache All Timeline Clips ===
-# Instead of querying the API for every single VFX clip (which is slow),
-# we query all tracks once and store the items.
-all_timeline_clips = []
-print(json.dumps({"status": "progress", "message": "Caching timeline clips..."}))
-sys.stdout.flush()
-
-for track_idx in range(1, track_count + 1):
-    track_items = timeline.GetItemListInTrack("video", track_idx)
-    if track_items:
-        for item in track_items:
-            all_timeline_clips.append(item)
-
-print(f"✅ Cached {len(all_timeline_clips)} clips from {track_count} tracks.")
-
-for i, entry in enumerate(items_to_process):
-    # Immediate Progress Update at Start of Loop
-    print(f"PROGRESS: {processed_count}/{total_clips}")
+    start_tc_frames = tc_to_frames(start_tc, fps)
+    
+    # Cache all timeline clips to avoid repeated API calls
+    all_timeline_clips = []
+    track_count = timeline.GetTrackCount("video")
+    print(f"PROGRESS: 0/{len(markers)}")
     sys.stdout.flush()
-    try:
-        # 1. Resolve Timeline Item
-        timeline_item = None
+
+    for track_idx in range(1, track_count + 1):
+        track_items = timeline.GetItemListInTrack("video", track_idx)
+        if track_items:
+            for item in track_items:
+                all_timeline_clips.append(item)
+
+    print(json.dumps({"status": "progress", "message": f"Cached {len(all_timeline_clips)} clips from {track_count} tracks."}))
+    sys.stdout.flush()
+
+    processed_count = 0
+    assigned_total = 0
+
+    for m in markers:
+        processed_count += 1
+        print(f"PROGRESS: {processed_count}/{len(markers)}")
+        sys.stdout.flush()
+
+        vfx_name = m.get("name")
+        tc_in = m.get("tc")
+        tc_out = m.get("note")  # We passed tcOut in the note field
         
-        if "_legacy_item" in entry:
-            timeline_item = entry["_legacy_item"]
-        else:
-            # Index-Driven Lookup
-            uid = entry.get("uniqueId")
-            frame_start = int(entry.get("frameStart", 0))
-            
-            if uid and uid in timeline_uid_map:
-                timeline_item = timeline_uid_map[uid]
-            elif frame_start in timeline_frame_map:
-                 timeline_item = timeline_frame_map[frame_start]
-        
-        # If item not found on timeline, skip
-        if not timeline_item:
-            # print(json.dumps({"status": "debug", "message": f"Skipping {entry.get('vfxName')}: Not found on timeline."}))
+        if not vfx_name or not tc_in or not tc_out:
             continue
             
-        # 2. Get Current Data from Timeline Item
-        # (It might have moved since indexing)
-        vfx_in = timeline_item.GetStart()
-        vfx_out = timeline_item.GetEnd()
+        # Timecode parsing for Intersection Window
+        in_frames = start_frame + (tc_to_frames(tc_in, fps) - start_tc_frames)
+        out_frames = start_frame + (tc_to_frames(tc_out, fps) - start_tc_frames)
         
-        # 3. Determine Group Name (From Index!)
-        vfx_name = entry.get("vfxName", "Untitled")
-        
-        # 4. Create/Get Color Group
+        # Ensure correct order
+        if in_frames > out_frames:
+            in_frames, out_frames = out_frames, in_frames
+
+        # Get or Create Color Group
         groups = project.GetColorGroupsList()
         target_group = None
         if groups:
@@ -161,35 +115,28 @@ for i, entry in enumerate(items_to_process):
             target_group = project.AddColorGroup(vfx_name)
         
         if not target_group:
-             print(json.dumps({"status": "error", "message": f"Konnte Gruppe {vfx_name} nicht erstellen."}))
              continue
-
-        # 5. Find Overlapping Clips (Grouping) - USING CACHE
-        assigned_count = 0
-        
-        # We iterate over our cached list of ALL timeline items
+             
+        # Add intersecting clips to this color group
+        assigned_count_for_clip = 0
         for item in all_timeline_clips:
-            # Check Overlap
             i_start = item.GetStart()
             i_end = item.GetEnd()
             
-            if i_start < vfx_out and i_end > vfx_in:
+            # Simple overlap check: Item starts before VFX ends, AND Item ends after VFX starts
+            if i_start < out_frames and i_end > in_frames:
                 item.AssignToColorGroup(target_group)
-                assigned_count += 1
-        
-        # CSV Output
-        print(f"{vfx_name},{assigned_count}")
+                assigned_count_for_clip += 1
+                assigned_total += 1
+                
+        print(f"{vfx_name},{assigned_count_for_clip}")
         sys.stdout.flush()
 
-    except Exception as e:
-        print(json.dumps({"status": "error", "message": f"Error item {i}: {str(e)}"}))
-        # traceback.print_exc()
-        sys.stdout.flush()
+    print(json.dumps({
+        "status": "success", 
+        "processed": processed_count,
+        "total_clips_grouped": assigned_total
+    }))
 
-    processed_count += 1
-    # Only print progress every 5 items or last one to reduce spam? 
-    # Or just keep it.
-    print(f"PROGRESS: {processed_count}/{total_clips}")
-    sys.stdout.flush()
-
-print(json.dumps({"status": "success", "processed": processed_count}))
+except Exception as e:
+    print(json.dumps({"error": f"Script Error: {str(e)}"}))

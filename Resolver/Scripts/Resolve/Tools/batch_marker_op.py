@@ -26,8 +26,8 @@ except Exception as e:
 action = data.get("action")
 markers = data.get("markers", [])
 
-if not action or action not in ["create", "delete"]:
-    print(json.dumps({"error": "Invalid action. Must be 'create' or 'delete'."}))
+if not action or action not in ["create", "delete", "delete_all_vfx"]:
+    print(json.dumps({"error": "Invalid action. Must be 'create', 'delete', or 'delete_all_vfx'."}))
     sys.exit(1)
 
 try:
@@ -54,16 +54,44 @@ try:
         raise Exception("No active timeline")
 
     start_frame = int(timeline.GetStartFrame())
-    print(json.dumps({"status": "debug", "message": f"Timeline Start Frame: {start_frame}"}))
+    start_tc = timeline.GetStartTimecode() if hasattr(timeline, 'GetStartTimecode') else "01:00:00:00"
+    fps_raw = timeline.GetSetting("timelineFrameRate")
+    fps = float(fps_raw) if fps_raw else 25.0
+    print(json.dumps({"status": "debug", "message": f"Timeline Start Frame: {start_frame}, Start TC: {start_tc}, FPS: {fps}"}))
+    
+    def tc_to_frames(target_tc_str, fps_val):
+        parts = target_tc_str.replace(';', ':').split(':')
+        if len(parts) >= 4:
+            sh, sm, ss, sf = map(int, parts[:4])
+            return int((sh * 3600 + sm * 60 + ss) * fps_val + sf)
+        return 0
+
+    start_tc_frames = tc_to_frames(start_tc, fps)
     
     count = 0
     failed_count = 0
     
-    if action == "delete":
+    if action == "delete_all_vfx":
+        # Scan entire timeline for "Resolver VFX-Marker" in notes
+        markers_dict = timeline.GetMarkers()
+        if markers_dict:
+            for frame_id, marker_info in markers_dict.items():
+                note = marker_info.get("note", "")
+                if "Resolver VFX-Marker" in note:
+                    if timeline.DeleteMarkerAtFrame(frame_id, marker_info.get("color", "")):
+                        count += 1
+                    else:
+                        failed_count += 1
+    elif action == "delete":
         # DeleteMarkerAtFrame expects Absolute Frame and Color
         
         for m in markers:
-            frame_abs = int(m.get("frameId", 0))
+            if "tc" in m and m["tc"]:
+                target_frames = tc_to_frames(m["tc"], fps)
+                frame_abs = start_frame + (target_frames - start_tc_frames)
+            else:
+                frame_abs = int(m.get("frameId", 0))
+                
             color = m.get("color", "Cream")
             
             # Try to delete (Absolute)
@@ -79,7 +107,12 @@ try:
                 
     elif action == "create":
         for m in markers:
-            frame_abs = int(m.get("frameId", 0))
+            if "tc" in m and m["tc"]:
+                target_frames = tc_to_frames(m["tc"], fps)
+                frame_abs = start_frame + (target_frames - start_tc_frames)
+            else:
+                frame_abs = int(m.get("frameId", 0))
+                
             color = m.get("color", "Cream")
             name = m.get("name", "")
             note = m.get("note", "")

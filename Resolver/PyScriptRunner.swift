@@ -98,12 +98,21 @@ class PyScriptRunner {
                             fullOutput.append(data)
                             logHandle?.write(data)
                             
-                            // Parse Progress
+                            // Parse Progress & Log
                             if let str = String(data: data, encoding: .utf8) {
                                 let lines = str.components(separatedBy: .newlines)
-                                for line in lines where line.contains("PROGRESS:") {
-                                    DispatchQueue.main.async {
-                                        onProgress?(line)
+                                for line in lines {
+                                    if line.contains("PROGRESS:") {
+                                        DispatchQueue.main.async {
+                                            onProgress?(line)
+                                        }
+                                    } else {
+                                        let cleanLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                                        if !cleanLine.isEmpty {
+                                            DispatchQueue.main.async {
+                                                ConsoleLogger.shared.log("🐍 [\(scriptName)] \(cleanLine)")
+                                            }
+                                        }
                                     }
                                 }
                             }

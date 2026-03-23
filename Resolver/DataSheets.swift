@@ -2,7 +2,6 @@ import SwiftUI
 
 struct ImportDataSheet: View {
     let onDaVinciImport: () -> Void
-    let onSceneMarkersImport: () -> Void
     let onCSVImport: () -> Void
     let onCancel: () -> Void
     
@@ -38,20 +37,6 @@ struct ImportDataSheet: View {
                         Text("VFX Clips")
                             .font(.subheadline)
                         Text("Index VFX shots\nfrom DaVinci Resolve")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                    }
-                    .frame(width: 150, height: 130)
-                }
-                .buttonStyle(.bordered)
-                
-                Button(action: onSceneMarkersImport) {
-                    VStack(spacing: 8) {
-                        Image(systemName: "film.stack").font(.largeTitle)
-                        Text("Scene Markers")
-                            .font(.subheadline)
-                        Text("Import Cream markers\nas Scenes with Timecodes")
                             .font(.caption)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)

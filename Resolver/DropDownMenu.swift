@@ -197,6 +197,9 @@ struct DropDownMenu: View {
             
             MenuRow(title: "Debug Mode", icon: isDebugMode ? "checkmark" : nil) {
                 isDebugMode.toggle()
+                if isDebugMode {
+                    openWindow(id: "debug-console")
+                }
             }
         }
     }
