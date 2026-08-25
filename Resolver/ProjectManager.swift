@@ -127,6 +127,13 @@ struct SceneData: Codable, Identifiable {
     var startTC: String
 }
 
+struct EpisodeData: Codable, Identifiable, Equatable {
+    var id: UUID = UUID()
+    var timelineName: String
+    var timelineUniqueId: String? = nil
+    var episodeNumber: Int = 1
+}
+
 // Legacy Run structure for migration
 struct IndexingRun: Codable, Identifiable {
     var id: UUID = UUID()
@@ -161,11 +168,14 @@ class ProjectManager: ObservableObject {
             // Load master list whenever project changes
             loadMasterList()
             loadScenes()
+            loadEpisodes()
         }
     }
-    
+
     @Published var currentMasterList: [ClipData] = []
     @Published var currentScenes: [SceneData] = []
+    @Published var currentEpisodes: [EpisodeData] = []
+    @Published var excludedTimelineNames: Set<String> = []
     
     // Helper to get formatted date
     static let dateFormatter: DateFormatter = {
@@ -214,6 +224,16 @@ class ProjectManager: ObservableObject {
     func scenesUrl(for projectId: UUID) -> URL {
         let dir = projectDirectory(for: projectId)
         return dir.appendingPathComponent("Scenes.csv")
+    }
+
+    func episodesUrl(for projectId: UUID) -> URL {
+        let dir = projectDirectory(for: projectId)
+        return dir.appendingPathComponent("Episodes.csv")
+    }
+
+    func excludedTimelinesUrl(for projectId: UUID) -> URL {
+        let dir = projectDirectory(for: projectId)
+        return dir.appendingPathComponent("Episodes_Excluded.csv")
     }
     
     // MARK: - Actions
@@ -316,7 +336,87 @@ class ProjectManager: ObservableObject {
             print("❌ Error saving Scenes CSV: \(error)")
         }
     }
-    
+
+    // MARK: - Episode Management
+
+    func loadEpisodes() {
+        guard let proj = currentProject else {
+            currentEpisodes = []
+            excludedTimelineNames = []
+            return
+        }
+        let url = episodesUrl(for: proj.id)
+        if FileManager.default.fileExists(atPath: url.path) {
+            do {
+                let text = try String(contentsOf: url, encoding: .utf8)
+                var loaded: [EpisodeData] = []
+                let rows = text.components(separatedBy: .newlines)
+                for row in rows.dropFirst() {
+                    if row.trimmingCharacters(in: .whitespaces).isEmpty { continue }
+                    let cols = row.components(separatedBy: ",")
+                    if cols.count >= 4, let uuid = UUID(uuidString: cols[0]) {
+                        let uniqueId = cols[2].isEmpty ? nil : cols[2]
+                        let number = Int(cols[3]) ?? 1
+                        loaded.append(EpisodeData(id: uuid, timelineName: cols[1], timelineUniqueId: uniqueId, episodeNumber: number))
+                    }
+                }
+                currentEpisodes = loaded
+                print("🔄 Loaded \(currentEpisodes.count) episodes from Episodes.csv")
+            } catch {
+                print("❌ Error loading Episodes CSV: \(error)")
+                currentEpisodes = []
+            }
+        } else {
+            currentEpisodes = []
+        }
+        loadExcludedTimelines()
+    }
+
+    func saveEpisodes() {
+        guard let proj = currentProject else { return }
+        let url = episodesUrl(for: proj.id)
+        var csv = "id,timelineName,timelineUniqueId,episodeNumber\n"
+        for episode in currentEpisodes {
+            let safeTimelineName = episode.timelineName.replacingOccurrences(of: ",", with: ";")
+            let safeUniqueId = (episode.timelineUniqueId ?? "").replacingOccurrences(of: ",", with: "")
+            csv += "\(episode.id.uuidString),\(safeTimelineName),\(safeUniqueId),\(episode.episodeNumber)\n"
+        }
+        do {
+            try csv.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            print("❌ Error saving Episodes CSV: \(error)")
+        }
+    }
+
+    // Timelines the user has explicitly removed from the Episode Manager list.
+    // Kept separately so a re-index doesn't resurrect them.
+    func loadExcludedTimelines() {
+        guard let proj = currentProject else {
+            excludedTimelineNames = []
+            return
+        }
+        let url = excludedTimelinesUrl(for: proj.id)
+        if let text = try? String(contentsOf: url, encoding: .utf8) {
+            let names = text.components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            excludedTimelineNames = Set(names)
+        } else {
+            excludedTimelineNames = []
+        }
+    }
+
+    func saveExcludedTimelines() {
+        guard let proj = currentProject else { return }
+        let url = excludedTimelinesUrl(for: proj.id)
+        let csv = excludedTimelineNames.sorted().joined(separator: "\n")
+        do {
+            try csv.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            print("❌ Error saving Excluded Timelines CSV: \(error)")
+        }
+    }
+
     // MARK: - Master List Management
     
     func loadMasterList() {

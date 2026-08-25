@@ -39,6 +39,7 @@ struct ProjectExportView: View {
     
     // Scene Manager & Generator States
     @State private var showSceneManager = false
+    @State private var showEpisodeManager = false
     @State private var showVfxNameGenerator = false
     
     // Import State
@@ -177,7 +178,15 @@ struct ProjectExportView: View {
                         .buttonStyle(.bordered)
                         .controlSize(.regular)
                         .fixedSize()
-                        
+
+                        // Episode Manager button
+                        Button { showEpisodeManager = true } label: {
+                            Label("Episode Manager", systemImage: "list.bullet.rectangle.portrait")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.regular)
+                        .fixedSize()
+
                         if selectedScenePrefix != nil {
                             Button { selectedScenePrefix = nil } label: {
                                 Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
@@ -470,6 +479,11 @@ struct ProjectExportView: View {
         // Scene Management Sheet
         .sheet(isPresented: $showSceneManager) {
             SceneManagementView(project: projectManager.currentProject!)
+        }
+
+        // Episode Management Sheet
+        .sheet(isPresented: $showEpisodeManager) {
+            EpisodeManagementView(project: projectManager.currentProject!)
         }
         
         // VFX Name Generator Sheet
