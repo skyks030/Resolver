@@ -79,10 +79,20 @@ try:
     timeline_start_frame = timeline.GetStartFrame()
     frame_rate = timeline.GetSetting("timelineFrameRate")
 
+    # === Analyze Timeline ===
+    # Computed early since Episode matching (below) needs it regardless of arg order.
+    timeline_name = timeline.GetName()
+    track_count = timeline.GetTrackCount("video")
+
     # === Input Argumente ===
+    # Positional args are always passed (as "" when unused) by the Swift side,
+    # so indices never shift depending on which optional features are active.
     target_track_index = int(sys.argv[1]) if len(sys.argv) > 1 else 1
-    output_file_path = os.environ.get("RESOLVER_TMP_OUT")
-    
+    # Must match the env var PyScriptRunner.swift actually sets (RESOLVER_OUTPUT_FILE).
+    # If this is wrong, out_f falls back to stdout, and the interleaved "PROGRESS: x/y"
+    # print() lines end up mixed into the CSV data the app reads back.
+    output_file_path = os.environ.get("RESOLVER_OUTPUT_FILE")
+
     # Check for end marker flag (default: False)
     vfx_end_marker_enabled = False
     if len(sys.argv) > 2:
@@ -90,18 +100,29 @@ try:
 
     # Check for renaming map
     renaming_map = {}
-    if len(sys.argv) > 3:
-        renaming_map_path = sys.argv[3]
-        if os.path.exists(renaming_map_path):
-             try:
-                 with open(renaming_map_path, 'r') as f:
-                     renaming_map = json.load(f)
-             except Exception as e:
-                 print(json.dumps({"status": "debug", "message": f"Failed to load renaming map: {e}"}))
+    renaming_map_path = sys.argv[3] if len(sys.argv) > 3 else ""
+    if renaming_map_path and os.path.exists(renaming_map_path):
+        try:
+            with open(renaming_map_path, 'r') as f:
+                renaming_map = json.load(f)
+        except Exception as e:
+            print(json.dumps({"status": "debug", "message": f"Failed to load renaming map: {e}"}))
 
-    # === Analyze Timeline ===
-    timeline_name = timeline.GetName()
-    track_count = timeline.GetTrackCount("video")
+    # Check for episodes map: a list of {"timelineName": ..., "episodeNumber": ...}
+    # registered via the Episode Manager. If this timeline's name matches one of
+    # them, every clip indexed here gets tagged with that episode number.
+    episode_number = ""
+    episodes_map_path = sys.argv[4] if len(sys.argv) > 4 else ""
+    if episodes_map_path and os.path.exists(episodes_map_path):
+        try:
+            with open(episodes_map_path, 'r') as f:
+                episodes_list = json.load(f)
+            for ep in episodes_list:
+                if ep.get("timelineName") == timeline_name:
+                    episode_number = str(ep.get("episodeNumber", ""))
+                    break
+        except Exception as e:
+            print(json.dumps({"status": "debug", "message": f"Failed to load episodes map: {e}"}))
 
     # === Clips auf Videospur analysieren ===
     videospur = timeline.GetItemListInTrack("video", target_track_index)
@@ -118,7 +139,7 @@ try:
         out_f = sys.stdout
 
     # Write CSV Header
-    header = ["Clip Name", "Rec TC In", "Rec TC Out", "Source TC In", "Source TC Out", "Duration", "File Name", "Reel Name"]
+    header = ["Clip Name", "Rec TC In", "Rec TC Out", "Source TC In", "Source TC Out", "Duration", "File Name", "Reel Name", "Episode"]
     out_f.write(",".join(header) + "\n")
     
     clip_count = len(videospur)
@@ -180,7 +201,8 @@ try:
             safe_csv(source_tc_out),
             str(duration),
             safe_csv(file_name),
-            safe_csv(reel_name)
+            safe_csv(reel_name),
+            safe_csv(episode_number)
         ]
         
         out_f.write(",".join(row) + "\n")

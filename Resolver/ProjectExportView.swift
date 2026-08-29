@@ -79,20 +79,33 @@ struct ProjectExportView: View {
         return keys.sorted()
     }
     
+    // VFX Name, Clip Name, [Episode], [Scene], and the TC columns are always
+    // pinned at the front, in that order. Episode/Scene are only included when
+    // they actually carry data — i.e. when Episodes/Scenes are registered and
+    // matched to at least one clip — otherwise they behave like any other
+    // (absent) custom column.
+    private var fixedColumns: [String] {
+        var cols = ["VFX Name", "Clip Name"]
+        let available = availableCustomColumns
+        if available.contains("Episode") { cols.append("Episode") }
+        if available.contains("Scene") { cols.append("Scene") }
+        cols.append(contentsOf: ["TC In", "TC Out", "Source TC In", "Source TC Out"])
+        return cols
+    }
+
     private var activeColumns: [String] {
         let available = availableCustomColumns
         var cols = columnOrder.filter { available.contains($0) }
         for col in available {
             if !cols.contains(col) { cols.append(col) }
         }
-        
-        // Fix VFX Name, Clip Name, and TC columns at the beginning
-        let fixedCols = ["VFX Name", "Clip Name", "TC In", "TC Out", "Source TC In", "Source TC Out"]
+
+        let fixedCols = fixedColumns
         cols.removeAll(where: { fixedCols.contains($0) })
-        
+
         // Add them back at the very front
         cols.insert(contentsOf: fixedCols, at: 0)
-        
+
         return cols
     }
     
@@ -151,8 +164,7 @@ struct ProjectExportView: View {
                                 if customCols.isEmpty {
                                     Text("No custom columns").foregroundColor(.secondary)
                                 }
-                                let fixedCols = ["VFX Name", "Clip Name", "TC In", "TC Out", "Source TC In", "Source TC Out"]
-                                let toggleCols = customCols.filter { !fixedCols.contains($0) }
+                                let toggleCols = customCols.filter { !fixedColumns.contains($0) }
                                 ForEach(toggleCols, id: \.self) { col in
                                     Toggle(col, isOn: Binding(
                                         get: { customColumnVisibility[col] ?? true },
@@ -171,17 +183,17 @@ struct ProjectExportView: View {
                         .controlSize(.regular)
                         .fixedSize()
                         
-                        // Manage Scenes button
+                        // Scenes button
                         Button { showSceneManager = true } label: {
-                            Label("Manage Scenes", systemImage: "film.stack")
+                            countBadgeLabel(title: "Scenes", icon: "film.stack", count: projectManager.currentScenes.count)
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.regular)
                         .fixedSize()
 
-                        // Episode Manager button
+                        // Episodes button
                         Button { showEpisodeManager = true } label: {
-                            Label("Episode Manager", systemImage: "list.bullet.rectangle.portrait")
+                            countBadgeLabel(title: "Episodes", icon: "list.bullet.rectangle.portrait", count: projectManager.currentEpisodes.count)
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.regular)
@@ -509,7 +521,20 @@ struct ProjectExportView: View {
     }
     
     // MARK: - Subviews
-    
+
+    @ViewBuilder
+    private func countBadgeLabel(title: String, icon: String, count: Int) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+            Text(title)
+            Text("\(count)")
+                .font(.caption2.bold())
+                .padding(.horizontal, 6)
+                .padding(.vertical, 1)
+                .background(Capsule().fill(Color.secondary.opacity(0.25)))
+        }
+    }
+
     private var duplicateWarningBanner: some View {
         HStack {
             Image(systemName: "exclamationmark.triangle.fill")
@@ -592,7 +617,7 @@ struct ProjectExportView: View {
                         .help("Delete Project")
                         
                         // Project Stats
-                        Text("Scenes: \(projectManager.currentScenes.count) | VFX Shots: \(projectManager.currentMasterList.count)")
+                        Text("Episodes: \(projectManager.currentEpisodes.count) | Scenes: \(projectManager.currentScenes.count) | VFX Shots: \(projectManager.currentMasterList.count)")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .padding(.leading, 8)
@@ -813,8 +838,7 @@ struct ProjectExportView: View {
                 let cols = activeColumns.filter { customColumnVisibility[$0] ?? true }
                 ForEach(cols.indices, id: \.self) { i in
                     let col = cols[i]
-                    let fixedCols = ["VFX Name", "Clip Name", "TC In", "TC Out", "Source TC In", "Source TC Out"]
-                    let isFixed = fixedCols.contains(col)
+                    let isFixed = fixedColumns.contains(col)
                     
                     HStack(spacing: 4) {
                         if isEditingMasterlist && !isFixed {
@@ -872,7 +896,7 @@ struct ProjectExportView: View {
                         }
                     }
                     // Disable drop target for fixed columns
-                    .onDrop(of: isFixed ? [] : [.plainText], delegate: ColumnDropDelegate(item: col, items: $columnOrder, draggedItem: $draggedColumn, activeColumns: cols, onReorder: {}))
+                    .onDrop(of: isFixed ? [] : [.plainText], delegate: ColumnDropDelegate(item: col, items: $columnOrder, draggedItem: $draggedColumn, activeColumns: cols, fixedColumns: fixedColumns, onReorder: {}))
                     .frame(width: columnWidth(for: col), alignment: .leading)
                     .padding(.horizontal, 4)
                     .overlay(
@@ -918,6 +942,8 @@ struct ProjectExportView: View {
         case "Reel Name": return 150
         case "TC In", "TC Out", "Source TC In", "Source TC Out": return 110
         case "Duration", "Frame Start", "Frame End": return 100
+        case "Episode": return 80
+        case "Scene": return 90
         default: return 120
         }
     }
@@ -1151,7 +1177,61 @@ struct ProjectExportView: View {
     }
     
     // MARK: - Indexing & Merging
-    
+
+    // Takes the raw CSV straight from clip-indexing.py and:
+    // - drops the "Episode" column entirely if no episodes are registered
+    //   (otherwise it would show up as an always-empty column)
+    // - computes and adds a "Scene" column, only if scenes are registered,
+    //   by matching each clip's Record TC against the registered scene ranges
+    // - pins Episode (if present) then Scene (if present) directly after
+    //   "Clip Name" — both in the Data Import Preview and, once merged, in
+    //   the Master VFX List (activeColumns pins them there too)
+    private func augmentIndexingCSV(_ rawCSV: String) -> String {
+        let lines = rawCSV.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        guard let firstLine = lines.first else { return rawCSV }
+        let delimiter = CSVManager.detectDelimiter(in: firstLine)
+        let rawRows = lines.map { CSVManager.parseCSVRow($0, delimiter: delimiter) }
+        guard let originalHeader = rawRows.first, originalHeader.contains("Clip Name") else { return rawCSV }
+
+        let episodesEnabled = !projectManager.currentEpisodes.isEmpty
+        let scenesEnabled = !projectManager.currentScenes.isEmpty
+        let recTcInIdx = originalHeader.firstIndex(of: "Rec TC In")
+
+        // Rebuild each row as a [columnName: value] dict against the original
+        // header, adding "Scene" where applicable. Rebuilding from a dict avoids
+        // fragile manual index bookkeeping when the column order changes below.
+        var dataDicts: [[String: String]] = []
+        for row in rawRows.dropFirst() {
+            var dict: [String: String] = [:]
+            for (i, colName) in originalHeader.enumerated() {
+                dict[colName] = i < row.count ? row[i] : ""
+            }
+            if scenesEnabled, let tcIdx = recTcInIdx {
+                let tc = tcIdx < row.count ? row[tcIdx] : ""
+                dict["Scene"] = SceneData.matchedSceneName(for: tc, in: projectManager.currentScenes) ?? ""
+            }
+            dataDicts.append(dict)
+        }
+
+        var newHeader = originalHeader.filter { $0 != "Episode" && $0 != "Scene" }
+        guard let clipNameIdx = newHeader.firstIndex(of: "Clip Name") else { return rawCSV }
+        var insertAt = clipNameIdx + 1
+        if episodesEnabled {
+            newHeader.insert("Episode", at: insertAt)
+            insertAt += 1
+        }
+        if scenesEnabled {
+            newHeader.insert("Scene", at: insertAt)
+        }
+
+        var csv = newHeader.map { CSVManager.escape($0) }.joined(separator: ",") + "\n"
+        for dict in dataDicts {
+            let row = newHeader.map { CSVManager.escape(dict[$0] ?? "") }
+            csv += row.joined(separator: ",") + "\n"
+        }
+        return csv
+    }
+
     private func startMergeReview(importedClips: [ClipData], markers: [MarkerData]) {
         guard let project = projectManager.currentProject else { return }
         let preprocessed = projectManager.prepareImportedClips(importedClips, projectId: project.id)
@@ -1178,9 +1258,24 @@ struct ProjectExportView: View {
                 renamingMapArg = tmpURL.path
             } catch { print("Failed to encode map") }
         }
-        
-        var args = [vfxTrack, endMarkerArg]
-        if !renamingMapArg.isEmpty { args.append(renamingMapArg) }
+
+        // Episode mapping: lets the indexing script tag every clip with the
+        // Episode number of whichever registered timeline is currently being indexed.
+        var episodesMapArg = ""
+        if !projectManager.currentEpisodes.isEmpty {
+            let mapping = projectManager.currentEpisodes.map { ["timelineName": $0.timelineName, "episodeNumber": $0.episodeNumber] as [String: Any] }
+            do {
+                let data = try JSONSerialization.data(withJSONObject: mapping)
+                let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent("resolver_episodes_map.json")
+                try data.write(to: tmpURL)
+                episodesMapArg = tmpURL.path
+            } catch { print("Failed to encode episodes map") }
+        }
+
+        // Always pass positionally (empty string when unused) so argument
+        // indices in the Python script never shift depending on which
+        // optional features are active.
+        let args = [vfxTrack, endMarkerArg, renamingMapArg, episodesMapArg]
 
         PyScriptRunner.run(scriptName: "Resolve/VFX/clip-indexing", args: args, showOutput: false, onProgress: { progressLine in
             if let range = progressLine.range(of: "PROGRESS: ") {
@@ -1202,8 +1297,9 @@ struct ProjectExportView: View {
                 
                 // Write CSV output to a temporary file
                 do {
+                    let augmented = self.augmentIndexingCSV(output)
                     let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent("davinci_import.csv")
-                    try output.write(to: tmpURL, atomically: true, encoding: .utf8)
+                    try augmented.write(to: tmpURL, atomically: true, encoding: .utf8)
                     
                     // Launch CSV Import Window
                     CSVImportView.showStandalone(url: tmpURL) { importedClips in
@@ -1450,17 +1546,16 @@ struct ColumnDropDelegate: DropDelegate {
     @Binding var items: [String]
     @Binding var draggedItem: String?
     let activeColumns: [String]
+    let fixedColumns: [String]
     let onReorder: () -> Void
 
     func dropEntered(info: DropInfo) {
         guard let draggedItem, draggedItem != item,
               let from = items.firstIndex(of: draggedItem) else { return }
 
-        let fixedCols = ["VFX Name", "Clip Name", "TC In", "TC Out", "Source TC In", "Source TC Out"]
-        
         // Protect fixed columns
-        if fixedCols.contains(draggedItem) { return }
-        if fixedCols.contains(item) { return }
+        if fixedColumns.contains(draggedItem) { return }
+        if fixedColumns.contains(item) { return }
 
         // Since UI maps over activeColumns, 'item' is the target column name
         if let to = items.firstIndex(of: item), items[to] != draggedItem {

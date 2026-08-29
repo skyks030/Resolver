@@ -125,6 +125,20 @@ struct SceneData: Codable, Identifiable {
     var id: UUID = UUID()
     var name: String
     var startTC: String
+
+    // Shared scene-matching logic: which registered scene a given Record TC
+    // falls into (scenes are ranges from their startTC up to the next scene's
+    // startTC). Used both by the VFX Name Generator and by DaVinci import to
+    // pre-populate a per-clip "Scene" column.
+    static func matchedSceneName(for tc: String, in scenes: [SceneData]) -> String? {
+        let cleanTC = tc.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleanTC.isEmpty { return nil }
+        var matchedName: String? = nil
+        for scene in scenes.sorted(by: { $0.startTC < $1.startTC }) {
+            if cleanTC >= scene.startTC { matchedName = scene.name } else { break }
+        }
+        return matchedName
+    }
 }
 
 struct EpisodeData: Codable, Identifiable, Equatable {
@@ -132,6 +146,26 @@ struct EpisodeData: Codable, Identifiable, Equatable {
     var timelineName: String
     var timelineUniqueId: String? = nil
     var episodeNumber: Int = 1
+}
+
+// Persisted VFX Name Generator schema, so a project remembers its naming
+// pattern (prefix, episode/scene/shot settings, separators) across reopens.
+struct VfxNameSchema: Codable, Equatable {
+    var prefixText: String = ""
+    var includeEpisodeNum: Bool = false
+    var episodeNumDigits: Int = 2
+    var episodeLabelText: String = "E"
+    var includeSceneNum: Bool = true
+    var sceneNumDigits: Int = 3
+    var includeCounter: Bool = true
+    var counterDigits: Int = 3
+    var counterStart: Int = 10
+    var counterStep: Int = 10
+    var suffixText: String = ""
+    var sepPrefixEpisode: String = ""
+    var sepEpisodeScene: String = ""
+    var sepSceneShot: String = "_"
+    var sepShotSuffix: String = ""
 }
 
 // Legacy Run structure for migration
@@ -152,6 +186,7 @@ struct Project: Codable, Identifiable {
     var vfxThumbnailTrackIndex: String? = nil
     var vfxEndMarkerEnabled: Bool? = false // Default OFF
     var vfxRenamingMap: [String: String]? = [:] // Map Original Name -> New Name
+    var vfxNameSchema: VfxNameSchema? = nil // Remembered VFX Name Generator settings
 }
 
 struct ProjectStore: Codable {
@@ -175,7 +210,6 @@ class ProjectManager: ObservableObject {
     @Published var currentMasterList: [ClipData] = []
     @Published var currentScenes: [SceneData] = []
     @Published var currentEpisodes: [EpisodeData] = []
-    @Published var excludedTimelineNames: Set<String> = []
     
     // Helper to get formatted date
     static let dateFormatter: DateFormatter = {
@@ -229,11 +263,6 @@ class ProjectManager: ObservableObject {
     func episodesUrl(for projectId: UUID) -> URL {
         let dir = projectDirectory(for: projectId)
         return dir.appendingPathComponent("Episodes.csv")
-    }
-
-    func excludedTimelinesUrl(for projectId: UUID) -> URL {
-        let dir = projectDirectory(for: projectId)
-        return dir.appendingPathComponent("Episodes_Excluded.csv")
     }
     
     // MARK: - Actions
@@ -342,7 +371,6 @@ class ProjectManager: ObservableObject {
     func loadEpisodes() {
         guard let proj = currentProject else {
             currentEpisodes = []
-            excludedTimelineNames = []
             return
         }
         let url = episodesUrl(for: proj.id)
@@ -369,7 +397,6 @@ class ProjectManager: ObservableObject {
         } else {
             currentEpisodes = []
         }
-        loadExcludedTimelines()
     }
 
     func saveEpisodes() {
@@ -385,35 +412,6 @@ class ProjectManager: ObservableObject {
             try csv.write(to: url, atomically: true, encoding: .utf8)
         } catch {
             print("❌ Error saving Episodes CSV: \(error)")
-        }
-    }
-
-    // Timelines the user has explicitly removed from the Episode Manager list.
-    // Kept separately so a re-index doesn't resurrect them.
-    func loadExcludedTimelines() {
-        guard let proj = currentProject else {
-            excludedTimelineNames = []
-            return
-        }
-        let url = excludedTimelinesUrl(for: proj.id)
-        if let text = try? String(contentsOf: url, encoding: .utf8) {
-            let names = text.components(separatedBy: .newlines)
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-            excludedTimelineNames = Set(names)
-        } else {
-            excludedTimelineNames = []
-        }
-    }
-
-    func saveExcludedTimelines() {
-        guard let proj = currentProject else { return }
-        let url = excludedTimelinesUrl(for: proj.id)
-        let csv = excludedTimelineNames.sorted().joined(separator: "\n")
-        do {
-            try csv.write(to: url, atomically: true, encoding: .utf8)
-        } catch {
-            print("❌ Error saving Excluded Timelines CSV: \(error)")
         }
     }
 
@@ -540,13 +538,23 @@ class ProjectManager: ObservableObject {
     func updateVfxEndMarkerEnabled(projectId: UUID, enabled: Bool) {
         guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
         projects[index].vfxEndMarkerEnabled = enabled
-        
+
         if currentProject?.id == projectId {
             currentProject = projects[index]
         }
         save()
     }
-    
+
+    func updateVfxNameSchema(projectId: UUID, schema: VfxNameSchema) {
+        guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[index].vfxNameSchema = schema
+
+        if currentProject?.id == projectId {
+            currentProject = projects[index]
+        }
+        save()
+    }
+
     // MARK: - Persistence
     
     func save() {

@@ -75,7 +75,9 @@ class MergeManager {
                     masterClip.sourceTcIn == imp.sourceTcIn &&
                     masterClip.sourceTcOut == imp.sourceTcOut &&
                     masterClip.fileNames == imp.fileNames &&
-                    masterClip.reelName == imp.reelName
+                    masterClip.reelName == imp.reelName &&
+                    masterClip.dict["Episode"] == imp.dict["Episode"] &&
+                    masterClip.dict["Scene"] == imp.dict["Scene"]
                 )
                 
                 let state: MergeState = isIdentical ? .identical : .modified

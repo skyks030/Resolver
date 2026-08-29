@@ -123,8 +123,8 @@ struct CSVImportView: View {
                     if let filter = columnEmptyFilter {
                         let (label, colIdx) = {
                             switch filter {
-                            case .showEmpty(let i): return ("Show Empty – Col \(i+1)", i)
-                            case .hideEmpty(let i): return ("Hide Empty – Col \(i+1)", i)
+                            case .showEmpty(let i): return ("Show empty cells – Col \(i+1)", i)
+                            case .hideEmpty(let i): return ("Show filled cells – Col \(i+1)", i)
                             }
                         }()
                         
@@ -242,13 +242,13 @@ struct CSVImportView: View {
                 .bold()
                 .foregroundColor(.secondary)
         }
-        .frame(width: 80, height: 130)
+        .frame(width: 80, height: 150)
         .background(Color(nsColor: .windowBackgroundColor))
         .overlay(Rectangle().frame(width: 1).foregroundColor(.secondary.opacity(0.2)), alignment: .trailing)
         .overlay(Rectangle().frame(height: 1).foregroundColor(.secondary.opacity(0.2)), alignment: .bottom)
         .overlay(Rectangle().frame(height: 1).foregroundColor(.secondary.opacity(0.2)), alignment: .top)
     }
-    
+
     private var columnHeaderStrip: some View {
         HStack(alignment: .bottom, spacing: 1) {
             
@@ -275,36 +275,26 @@ struct CSVImportView: View {
                         .help("Include this column in import")
                     }
                     
-                    // Show Empty / Hide Empty buttons
-                    let activeShowEmpty = columnEmptyFilter == .showEmpty(cIdx)
-                    let activeHideEmpty = columnEmptyFilter == .hideEmpty(cIdx)
-                    
-                    HStack(spacing: 5) {
-                        Text("Show:")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                        Button(action: {
-                            columnEmptyFilter = activeShowEmpty ? nil : .showEmpty(cIdx)
-                        }) {
-                            Image(systemName: activeShowEmpty ? "checkmark.square.fill" : "square")
-                                .foregroundColor(activeShowEmpty ? .orange : .secondary)
-                                .font(.system(size: 12))
-                        }
-                        .buttonStyle(.plain)
-                        .help(activeShowEmpty ? "Remove filter" : "Show only rows where this column is empty")
-                        
-                        Text("Hide:")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                        Button(action: {
-                            columnEmptyFilter = activeHideEmpty ? nil : .hideEmpty(cIdx)
-                        }) {
-                            Image(systemName: activeHideEmpty ? "checkmark.square.fill" : "square")
-                                .foregroundColor(activeHideEmpty ? .purple : .secondary)
-                                .font(.system(size: 12))
-                        }
-                        .buttonStyle(.plain)
-                        .help(activeHideEmpty ? "Remove filter" : "Hide rows where this column is empty")
+                    // Show empty cells / Show filled cells.
+                    // Real Toggle controls (same component as "Import:" above) — a plain
+                    // custom Button here proved unreliable to re-click-to-deselect inside
+                    // this pinned header; Toggle is the native, proven-working control.
+                    VStack(alignment: .leading, spacing: 3) {
+                        Toggle("Show empty cells", isOn: Binding(
+                            get: { columnEmptyFilter == .showEmpty(cIdx) },
+                            set: { newValue in columnEmptyFilter = newValue ? .showEmpty(cIdx) : nil }
+                        ))
+                        .toggleStyle(.checkbox)
+                        .font(.caption2)
+                        .help(columnEmptyFilter == .showEmpty(cIdx) ? "Click again to remove this filter" : "Show only rows where this column is empty")
+
+                        Toggle("Show filled cells", isOn: Binding(
+                            get: { columnEmptyFilter == .hideEmpty(cIdx) },
+                            set: { newValue in columnEmptyFilter = newValue ? .hideEmpty(cIdx) : nil }
+                        ))
+                        .toggleStyle(.checkbox)
+                        .font(.caption2)
+                        .help(columnEmptyFilter == .hideEmpty(cIdx) ? "Click again to remove this filter" : "Show only rows where this column is filled")
                     }
                     
                     // Header rename field
@@ -317,7 +307,7 @@ struct CSVImportView: View {
                     .disabled(!self.columnIncludes[cIdx])
                 }
                 .padding(.horizontal, 4)
-                .frame(width: colWidth(cIdx), height: 130)
+                .frame(width: colWidth(cIdx), height: 150)
                 .background(columnIncludes[cIdx] ? Color(nsColor: .windowBackgroundColor) : Color.red.opacity(0.05))
                 .overlay(
                     (columnEmptyFilter == .showEmpty(cIdx)) ? Color.orange.opacity(0.08) :
@@ -327,7 +317,7 @@ struct CSVImportView: View {
                 
                 Rectangle()
                     .fill(Color.secondary.opacity(0.2))
-                    .frame(width: 4, height: 130)
+                    .frame(width: 4, height: 150)
                     .onHover { isHovering in
                         if isHovering { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
                     }
@@ -353,8 +343,10 @@ struct CSVImportView: View {
     
     private func leftRowIndicatorView(rIdx: Int) -> some View {
         let isIncluded = rowIncludes.count > rIdx ? rowIncludes[rIdx] : false
+        // Numbered relative to the header row, so the first actual data row is "1"
+        // (not its absolute position in the raw file, which would count the header).
         return HStack(spacing: 6) {
-            Text("\(rIdx + 1)")
+            Text("\(rIdx - headerRowIndex)")
                 .font(.caption2)
                 .foregroundColor(.secondary)
                 .frame(width: 25, alignment: .trailing)

@@ -27,28 +27,29 @@ struct ImportDataSheet: View {
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
                     }
-                    .frame(width: 150, height: 130)
+                    .frame(width: 170, height: 140)
                 }
                 .buttonStyle(.bordered)
-                
+
                 Button(action: onDaVinciImport) {
                     VStack(spacing: 8) {
-                        Image(systemName: "film").font(.largeTitle)
-                        Text("VFX Clips")
+                        daVinciResolveBadge
+                        Text("Import from DaVinci Resolve")
                             .font(.subheadline)
-                        Text("Index VFX shots\nfrom DaVinci Resolve")
+                            .multilineTextAlignment(.center)
+                        Text("Index VFX shots from the\ncurrently open timeline")
                             .font(.caption)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
                     }
-                    .frame(width: 150, height: 130)
+                    .frame(width: 170, height: 140)
                 }
                 .buttonStyle(.bordered)
             }
             .padding(.vertical)
-            
+
             Divider()
-            
+
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { onCancel() }
@@ -56,7 +57,34 @@ struct ImportDataSheet: View {
             }
         }
         .padding()
-        .frame(width: 560, height: 340)
+        .frame(width: 580, height: 350)
+    }
+
+    // A small original badge evoking DaVinci Resolve's color-grading identity
+    // (dark tile + colorful arc), used to visually flag "this specifically
+    // pulls from the live DaVinci Resolve app" rather than a generic file.
+    private var daVinciResolveBadge: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 10)
+                .fill(
+                    LinearGradient(
+                        colors: [Color(red: 0.10, green: 0.10, blue: 0.12), Color(red: 0.18, green: 0.18, blue: 0.21)],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                )
+            Circle()
+                .trim(from: 0, to: 0.78)
+                .stroke(
+                    AngularGradient(colors: [.orange, .pink, .purple, .blue, .cyan, .orange], center: .center),
+                    style: StrokeStyle(lineWidth: 4, lineCap: .round)
+                )
+                .rotationEffect(.degrees(-90))
+                .padding(7)
+            Image(systemName: "play.fill")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundColor(.white)
+        }
+        .frame(width: 40, height: 40)
     }
 }
 

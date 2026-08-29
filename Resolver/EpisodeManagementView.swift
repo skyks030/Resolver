@@ -84,14 +84,15 @@ struct EpisodeManagementView: View {
                     List {
                         Section(
                             header: Text("Timelines in \"\(project.name)\""),
-                            footer: Text("Timelines are sorted alphabetically and numbered from Episode 1. Edit a number to reassign it — whichever timeline currently has that number swaps to the old one. Removed timelines stay hidden on re-index.")
+                            footer: Text("Edit a number to reassign it — whichever timeline currently has that number swaps to the old one. Deleting a timeline removes it from this list; press \"Re-Index\" to pull the full timeline list from the project again.")
                         ) {
                             if projectManager.currentEpisodes.isEmpty {
                                 Text("No timelines found in this project.").foregroundColor(.secondary)
                             } else {
-                                ForEach(projectManager.currentEpisodes) { episode in
+                                ForEach(projectManager.currentEpisodes.sorted(by: { $0.episodeNumber < $1.episodeNumber })) { episode in
                                     episodeRow(episode)
                                 }
+                                .animation(.default, value: projectManager.currentEpisodes)
                             }
                         }
                     }
@@ -180,9 +181,7 @@ struct EpisodeManagementView: View {
 
     private func deleteEpisode(_ episode: EpisodeData) {
         projectManager.currentEpisodes.removeAll { $0.id == episode.id }
-        projectManager.excludedTimelineNames.insert(episode.timelineName)
         projectManager.saveEpisodes()
-        projectManager.saveExcludedTimelines()
     }
 
     // MARK: - Indexing
@@ -220,15 +219,14 @@ struct EpisodeManagementView: View {
         }
     }
 
-    // Merges freshly indexed timelines with the existing episode list:
-    // - previously excluded (deleted) timelines stay hidden
-    // - existing episode numbers are preserved
-    // - brand-new timelines are appended, sorted alphabetically, and
-    //   auto-numbered continuing from the highest number in use
+    // Re-Index always reflects the full, live state of the project: every
+    // timeline currently in DaVinci Resolve is shown, including ones
+    // previously removed here. Existing episode numbers are preserved for
+    // timelines that are still present; brand-new timelines are appended,
+    // sorted alphabetically, and auto-numbered continuing from the highest
+    // number in use.
     private func mergeTimelines(_ timelines: [TimelineInfo]) {
-        let excluded = projectManager.excludedTimelineNames
         let incoming = timelines
-            .filter { !excluded.contains($0.name) }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
         var existing = projectManager.currentEpisodes
