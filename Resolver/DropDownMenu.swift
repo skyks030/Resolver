@@ -50,6 +50,7 @@ struct DropDownMenu: View {
         }
         .frame(width: 200) // Fixed width for consistent navigation
         .padding(6)
+        .liquidGlassPanel(cornerRadius: 14)
         .background(WindowAccessor(window: $menuWindow))
         .animation(.easeInOut(duration: 0.2), value: activePage)
     }
@@ -148,7 +149,7 @@ struct DropDownMenu: View {
                     newProjectName = ""
                 }
             }
-            .buttonStyle(.borderedProminent)
+            .liquidGlassButton(prominent: true)
             .disabled(newProjectName.isEmpty)
             .keyboardShortcut(.defaultAction)
         }

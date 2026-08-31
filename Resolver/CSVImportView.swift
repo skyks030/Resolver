@@ -59,8 +59,8 @@ struct CSVImportView: View {
                     .controlSize(.small)
             }
             .padding()
-            .background(Color(nsColor: .windowBackgroundColor))
-            
+            .liquidGlassBar()
+
             if let errorMsg = errorMsg {
                 Text(errorMsg)
                     .foregroundColor(.red)
@@ -105,8 +105,7 @@ struct CSVImportView: View {
                     }
                 }
                 .padding(6)
-                .background(Color.secondary.opacity(0.1))
-                .cornerRadius(6)
+                .liquidGlassPanel(cornerRadius: 6)
                 .frame(width: 250)
                 
                 Spacer()
@@ -200,7 +199,7 @@ struct CSVImportView: View {
                 Button("Process Import") {
                     processImport()
                 }
-                .buttonStyle(.borderedProminent)
+                .liquidGlassButton(prominent: true)
                 .disabled(rawRows.isEmpty || columnIncludes.allSatisfy { !$0 } || rowIncludes.allSatisfy { !$0 })
                 .keyboardShortcut(.defaultAction)
             }

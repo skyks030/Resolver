@@ -79,8 +79,7 @@ struct VfxNameGeneratorView: View {
                     .foregroundColor(.accentColor)
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.accentColor.opacity(0.08))
-                    .cornerRadius(8)
+                    .liquidGlassPanel(cornerRadius: 8, tint: .accentColor)
                 Text("Scene \"10\", shot \(counterStart) as example")
                     .font(.caption2)
                     .foregroundColor(.secondary)
@@ -252,12 +251,12 @@ struct VfxNameGeneratorView: View {
                 Spacer()
 
                 Button("Cancel") { dismiss() }
-                    .buttonStyle(.bordered)
+                    .liquidGlassButton(prominent: false)
 
                 Button("Generate Names for all VFX Shots") {
                     generateNames()
                 }
-                .buttonStyle(.borderedProminent)
+                .liquidGlassButton(prominent: true)
                 .disabled(projectManager.currentMasterList.isEmpty)
             }
             .padding(20)
@@ -350,9 +349,7 @@ struct VfxNameGeneratorView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(10)
-        .background(Color(.windowBackgroundColor).opacity(0.5))
-        .cornerRadius(8)
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.2)))
+        .liquidGlassPanel(cornerRadius: 8)
     }
 
     private func buildName(episodeNumber: Int?, sceneName: String, counter: Int) -> String {

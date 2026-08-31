@@ -37,9 +37,8 @@ struct ThumbnailImportSheet: View {
                 }
             }
             .padding()
-            .background(Color.secondary.opacity(0.1))
-            .cornerRadius(8)
-            
+            .liquidGlassPanel(cornerRadius: 8)
+
             Spacer()
             
             Divider()
@@ -59,7 +58,7 @@ struct ThumbnailImportSheet: View {
                 Button("Create Thumbnails") {
                     onStart()
                 }
-                .buttonStyle(.borderedProminent)
+                .liquidGlassButton(prominent: true)
                 .disabled(vfxThumbnailTrack.isEmpty)
                 .keyboardShortcut(.defaultAction)
             }

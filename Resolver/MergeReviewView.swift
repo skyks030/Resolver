@@ -29,10 +29,10 @@ struct MergeReviewView: View {
                 .font(.subheadline)
             }
             .padding()
-            .background(Color(nsColor: .windowBackgroundColor))
-            
+            .liquidGlassBar()
+
             Divider()
-            
+
             // Toolbar
             HStack {
                 Picker("Filter:", selection: $filterState) {
@@ -89,7 +89,7 @@ struct MergeReviewView: View {
             .foregroundColor(.secondary)
             .padding(.horizontal)
             .padding(.vertical, 6)
-            .background(Color(nsColor: .controlBackgroundColor))
+            .liquidGlassBar()
             
             Divider()
             
@@ -121,7 +121,7 @@ struct MergeReviewView: View {
                 Button("Apply \(selectedCount) Changes") {
                     onConfirm()
                 }
-                .buttonStyle(.borderedProminent)
+                .liquidGlassButton(prominent: true)
                 .disabled(selectedCount == 0)
                 .keyboardShortcut(.defaultAction)
             }
@@ -159,10 +159,17 @@ struct MergeItemRow: View {
                 .frame(width: 50)
                 .labelsHidden()
             
-            stateLabel
-                .frame(width: 80, alignment: .leading)
-                .font(.caption)
-            
+            VStack(alignment: .leading, spacing: 1) {
+                stateLabel
+                    .font(.caption)
+                if let confidence = item.matchConfidence {
+                    Text("via \(confidence.label)")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .frame(width: 80, alignment: .leading)
+
             Text(item.importedClip.vfxName)
                 .bold()
                 .frame(width: 150, alignment: .leading)
@@ -187,6 +194,11 @@ struct MergeItemRow: View {
                     Text("New Clip Entry")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                    if !item.candidateMasterClips.isEmpty {
+                        Text("\(item.candidateMasterClips.count) similar existing shot(s) found but not linked — ambiguous match, review manually")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
+                    }
                 } else {
                     Text("No significant changes")
                         .font(.caption)

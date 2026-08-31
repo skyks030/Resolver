@@ -36,9 +36,8 @@ struct DaVinciImportSheet: View {
                 }
             }
             .padding()
-            .background(Color.secondary.opacity(0.1))
-            .cornerRadius(8)
-            
+            .liquidGlassPanel(cornerRadius: 8)
+
             Spacer()
             
             Divider()
@@ -54,7 +53,7 @@ struct DaVinciImportSheet: View {
                 Button("Start Import") {
                     onStart()
                 }
-                .buttonStyle(.borderedProminent)
+                .liquidGlassButton(prominent: true)
                 .tint(.orange)
                 .disabled(vfxTrack.isEmpty)
                 .keyboardShortcut(.defaultAction)

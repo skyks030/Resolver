@@ -29,7 +29,7 @@ struct ImportDataSheet: View {
                     }
                     .frame(width: 170, height: 140)
                 }
-                .buttonStyle(.bordered)
+                .liquidGlassButton(prominent: false)
 
                 Button(action: onDaVinciImport) {
                     VStack(spacing: 8) {
@@ -44,7 +44,7 @@ struct ImportDataSheet: View {
                     }
                     .frame(width: 170, height: 140)
                 }
-                .buttonStyle(.bordered)
+                .liquidGlassButton(prominent: false)
             }
             .padding(.vertical)
 
@@ -113,7 +113,7 @@ struct ExportDataSheet: View {
                     }
                     .frame(width: 140, height: 110)
                 }
-                .buttonStyle(.bordered)
+                .liquidGlassButton(prominent: false)
                 
                 Button(action: onExcelExport) {
                     VStack {
@@ -122,7 +122,7 @@ struct ExportDataSheet: View {
                     }
                     .frame(width: 140, height: 110)
                 }
-                .buttonStyle(.bordered)
+                .liquidGlassButton(prominent: false)
             }
             .padding(.vertical)
             

@@ -46,8 +46,8 @@ struct DoubleClipsView: View {
                 }
             }
             .padding()
-            .background(Color(NSColor.controlBackgroundColor))
-            
+            .liquidGlassBar()
+
             Divider()
             
             // List
@@ -83,7 +83,7 @@ struct DoubleClipsView: View {
                         Button("Jump") {
                             jumpTo(frame: issue.startFrame)
                         }
-                        .buttonStyle(.borderedProminent)
+                        .liquidGlassButton(prominent: true)
                         .controlSize(.small)
                     }
                     .padding(.vertical, 4)
@@ -110,7 +110,7 @@ struct DoubleClipsView: View {
                     .foregroundColor(.secondary)
             }
             .padding(10)
-            .background(Color(NSColor.controlBackgroundColor))
+            .liquidGlassBar()
         }
         .frame(minWidth: 400, minHeight: 300)
         .alert("Error", isPresented: $showErrorAlert) {

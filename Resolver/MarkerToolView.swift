@@ -30,10 +30,10 @@ struct MarkerToolView: View {
                 .disabled(isLoading)
             }
             .padding()
-            .background(Color(nsColor: .windowBackgroundColor))
-            
+            .liquidGlassBar()
+
             Divider()
-            
+
             if isLoading {
                 Spacer()
                 ProgressView("Loading Markers...")
@@ -104,7 +104,7 @@ struct MarkerToolView: View {
                 Spacer()
             }
             .padding(10)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .liquidGlassBar()
         }
         .frame(minWidth: 400, minHeight: 300)
         .onAppear(perform: fetchMarkers)

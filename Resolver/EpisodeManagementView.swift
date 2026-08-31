@@ -77,7 +77,7 @@ struct EpisodeManagementView: View {
                             .foregroundColor(.secondary)
                             .padding(.horizontal)
                         Button("Retry") { indexTimelines() }
-                            .buttonStyle(.borderedProminent)
+                            .liquidGlassButton(prominent: true)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {

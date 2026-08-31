@@ -35,7 +35,7 @@ struct ProjectExportView: View {
     @State private var pendingMergeItems: [MergeItem] = []
     @State private var pendingImportedClips: [ClipData] = []
     @State private var pendingSceneMarkers: [MarkerData] = []
-    @State private var currentMergeKey: MergeKeyOption = .clipName
+    @State private var currentMergeKey: MergeKeyOption = .smart
     
     // Scene Manager & Generator States
     @State private var showSceneManager = false
@@ -179,7 +179,7 @@ struct ProjectExportView: View {
                             }
                         }
                         .menuStyle(.button)
-                        .buttonStyle(.bordered)
+                        .liquidGlassButton(prominent: false)
                         .controlSize(.regular)
                         .fixedSize()
                         
@@ -187,7 +187,7 @@ struct ProjectExportView: View {
                         Button { showSceneManager = true } label: {
                             countBadgeLabel(title: "Scenes", icon: "film.stack", count: projectManager.currentScenes.count)
                         }
-                        .buttonStyle(.bordered)
+                        .liquidGlassButton(prominent: false)
                         .controlSize(.regular)
                         .fixedSize()
 
@@ -195,7 +195,7 @@ struct ProjectExportView: View {
                         Button { showEpisodeManager = true } label: {
                             countBadgeLabel(title: "Episodes", icon: "list.bullet.rectangle.portrait", count: projectManager.currentEpisodes.count)
                         }
-                        .buttonStyle(.bordered)
+                        .liquidGlassButton(prominent: false)
                         .controlSize(.regular)
                         .fixedSize()
 
@@ -222,15 +222,15 @@ struct ProjectExportView: View {
                     
                     toolbarView(project: project)
                 }
-                .background(.ultraThinMaterial)
+                .liquidGlassBar()
                 .shadow(color: Color.black.opacity(0.15), radius: 8, x: 0, y: 3)
                 .zIndex(1) // Keep shadow above the table
-                
+
                 // Master VFX List Table
                 if !projectManager.currentMasterList.isEmpty {
                     ScrollView([.vertical, .horizontal]) {
                         LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                            Section(header: headerRow.background(.ultraThinMaterial)) {
+                            Section(header: headerRow.liquidGlassBar()) {
                                 filteredDataRows()
                             }
                         }
@@ -258,7 +258,7 @@ struct ProjectExportView: View {
                         Button("Import Data") {
                             showImportDataSheet = true
                         }
-                        .buttonStyle(.borderedProminent)
+                        .liquidGlassButton(prominent: true)
                         .padding(.top, 10)
                     }
                     Spacer()
@@ -278,7 +278,7 @@ struct ProjectExportView: View {
                     Button("Create New Project") {
                         showNewProjectAlert = true
                     }
-                    .buttonStyle(.borderedProminent)
+                    .liquidGlassButton(prominent: true)
                     .controlSize(.large)
                     .padding(.top, 10)
                 }
@@ -531,7 +531,7 @@ struct ProjectExportView: View {
                 .font(.caption2.bold())
                 .padding(.horizontal, 6)
                 .padding(.vertical, 1)
-                .background(Capsule().fill(Color.secondary.opacity(0.25)))
+                .liquidGlassCapsule(tint: .secondary)
         }
     }
 
@@ -558,7 +558,7 @@ struct ProjectExportView: View {
                 Text(showOnlyDuplicates ? "Show All Clips" : "Filter Duplicates")
                     .fontWeight(.semibold)
             }
-            .buttonStyle(.borderedProminent)
+            .liquidGlassButton(prominent: true)
             .tint(showOnlyDuplicates ? .blue : .red)
         }
         .padding(.horizontal, 20)
@@ -630,12 +630,12 @@ struct ProjectExportView: View {
             // CENTER: Import & Export Buttons
             HStack(spacing: 16) {
                 Button { showImportDataSheet = true } label: { Label("Import Data", systemImage: "arrow.down.doc").fixedSize() }
-                .buttonStyle(.borderedProminent)
+                .liquidGlassButton(prominent: true)
                 .controlSize(.large)
                 .fixedSize()
                 
                 Button { showExportDataSheet = true } label: { Label("Export Data", systemImage: "square.and.arrow.up").fixedSize() }
-                .buttonStyle(.bordered)
+                .liquidGlassButton(prominent: false)
                 .controlSize(.large)
                 .fixedSize()
             }
@@ -654,7 +654,7 @@ struct ProjectExportView: View {
                         Button("Delete VFX Markers", role: .destructive) { performPreflightAndRunBatchOp(type: "vfx", action: "delete", project: project) }
                     } label: { Label("Markers", systemImage: "mappin.and.ellipse") }
                     .menuStyle(.button)
-                    .buttonStyle(.bordered)
+                    .liquidGlassButton(prominent: false)
                     .controlSize(.small)
                     .fixedSize()
                     
@@ -672,7 +672,7 @@ struct ProjectExportView: View {
                         }
                     } label: { Label("Groups", systemImage: "paintpalette") }
                     .menuStyle(.button)
-                    .buttonStyle(.bordered)
+                    .liquidGlassButton(prominent: false)
                     .controlSize(.small)
                     .fixedSize()
                 }
@@ -713,7 +713,7 @@ struct ProjectExportView: View {
                 }) {
                     Label("Add Column", systemImage: "plus.table.column")
                 }
-                .buttonStyle(.bordered)
+                .liquidGlassButton(prominent: false)
                 
                 Button(action: {
                     var initialDict: [String: String] = [
@@ -733,7 +733,7 @@ struct ProjectExportView: View {
                 }) {
                     Label("Add Clip", systemImage: "plus.square.on.square")
                 }
-                .buttonStyle(.bordered)
+                .liquidGlassButton(prominent: false)
                 
                 Button("Select All") {
                     let visibleIds = getFilteredIndices(clips: projectManager.currentMasterList).map { projectManager.currentMasterList[$0].id }
@@ -743,12 +743,12 @@ struct ProjectExportView: View {
                         selectedForDelete = Set(visibleIds)
                     }
                 }
-                .buttonStyle(.bordered)
+                .liquidGlassButton(prominent: false)
                 
                 Button("Delete Selected") {
                     showDeleteShotsAlert = true
                 }
-                .buttonStyle(.borderedProminent)
+                .liquidGlassButton(prominent: true)
                 .tint(.red)
                 .disabled(selectedForDelete.isEmpty)
                 
@@ -770,7 +770,7 @@ struct ProjectExportView: View {
                     isEditingMasterlist = false
                     selectedForDelete.removeAll()
                 }
-                .buttonStyle(.borderedProminent)
+                .liquidGlassButton(prominent: true)
                 .tint(.green)
             }
             .padding(.horizontal, 20)
@@ -794,21 +794,21 @@ struct ProjectExportView: View {
                     }) {
                         Label("Edit Masterlist", systemImage: "pencil")
                     }
-                    .buttonStyle(.bordered)
+                    .liquidGlassButton(prominent: false)
                     .controlSize(.regular)
                 }
                 
                 Button(action: { showVfxNameGenerator = true }) {
                     Label("Generate VFX Names", systemImage: "wand.and.stars")
                 }
-                .buttonStyle(.bordered)
+                .liquidGlassButton(prominent: false)
                 .controlSize(.regular)
                 .fixedSize()
                 
                 Button("Thumbnails") {
                     showThumbnailImport = true
                 }
-                .buttonStyle(.borderedProminent)
+                .liquidGlassButton(prominent: true)
                 .controlSize(.regular)
                 .fixedSize()
             }

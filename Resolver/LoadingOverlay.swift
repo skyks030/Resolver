@@ -45,11 +45,8 @@ struct LoadingOverlay: View {
                     .foregroundColor(.primary)
             }
             .padding(30)
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Color(nsColor: .windowBackgroundColor))
-                    .shadow(radius: 10)
-            )
+            .liquidGlassPanel(cornerRadius: 12)
+            .shadow(radius: 10)
         }
     }
 }
