@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
 list_timelines.py
-Recursively scans the ENTIRE Media Pool of the currently open DaVinci Resolve
-project for Timeline clips (MediaPoolItem where clip property "Type" ==
-"Timeline") and lists their names. Cross-references the project's Timeline
-registry (Project.GetTimelineByIndex) to attach richer metadata (unique id,
-start timecode, frame count, fps) to each match.
+Lists every timeline in the currently open DaVinci Resolve project by reading
+the project's Timeline registry (Project.GetTimelineByIndex), which is
+authoritative and complete regardless of how each timeline was created
+(manually, or imported via AAF/XML/EDL). Only if that registry comes back
+completely empty does this fall back to a recursive Media Pool scan for
+Timeline-type clips (MediaPoolItem where clip property "Type" == "Timeline")
+— that scan is O(every clip in the project) with one Resolve round-trip per
+clip, so it is not run unless there is truly no other way to find timelines.
 
 Outputs a single JSON object on stdout:
   {"timelines": [{"name": str, "uniqueId": str, "startTC": str, "frameCount": int, "fps": str}, ...]}
@@ -195,24 +198,31 @@ def main():
     log(f"Registry metadata built for {len(timeline_meta_by_name)} timeline(s): {list(timeline_meta_by_name.keys())}")
 
     # === 2) Recursively search the entire Media Pool for Timeline clips ===
-    log("Scanning Media Pool for Timeline clips (recursive bin walk)...")
+    # ONLY as a last-resort fallback when the Timeline registry (above) found nothing at all.
+    # The registry is authoritative and complete — every timeline in a project (manually
+    # created, AAF/XML/EDL-imported, whatever) is always reachable via GetTimelineByIndex — so
+    # there is normally nothing this walk could add. It used to run unconditionally, which meant
+    # calling clip.GetClipProperty("Type") once per clip in the ENTIRE project (every bin,
+    # recursively) — each one a separate round-trip to Resolve. On a large feature-film project
+    # with thousands of Media Pool clips that took minutes and looked like a hang. Only pay that
+    # cost in the (very unlikely) case the registry itself came back empty.
     media_pool_names = []
-    try:
-        media_pool = project.GetMediaPool()
-        if media_pool:
-            media_pool_names = collect_media_pool_timeline_names(media_pool)
-    except Exception:
-        media_pool_names = []
-    log(f"Media Pool walk found {len(media_pool_names)} Timeline clip(s): {media_pool_names}")
+    if count == 0:
+        log("Timeline registry is empty — falling back to a Media Pool scan (recursive bin walk)...")
+        try:
+            media_pool = project.GetMediaPool()
+            if media_pool:
+                media_pool_names = collect_media_pool_timeline_names(media_pool)
+        except Exception:
+            media_pool_names = []
+        log(f"Media Pool walk found {len(media_pool_names)} Timeline clip(s): {media_pool_names}")
+    else:
+        log("Skipping Media Pool scan — Timeline registry already has every timeline.")
 
-    # Union of the Timeline registry (every timeline Resolve knows about,
-    # index 1..count) and whatever the Media Pool walk found, de-duplicated
-    # while preserving discovery order. This must be a union, not "prefer one,
-    # fall back to the other only if empty": an AAF/XML/EDL-imported timeline
-    # can land in a bin or report a clip 'Type' the recursive walk doesn't
-    # recognize, and previously that silently dropped it from the list even
-    # though the registry already had it. Registry names go first since they
-    # are the authoritative source.
+    # Union of the Timeline registry and whatever the Media Pool walk found
+    # (the latter is only ever non-empty in the registry-was-empty fallback
+    # case above), de-duplicated while preserving discovery order. Registry
+    # names go first since they are the authoritative source.
     seen = set()
     ordered_names = []
     for name in timeline_meta_by_name.keys():
