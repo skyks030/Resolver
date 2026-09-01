@@ -51,7 +51,13 @@ struct ProjectExportView: View {
     
     @State private var isEditingMasterlist = false
     @State private var selectedForDelete: Set<UUID> = []
-    
+    @State private var lastToggledClipId: UUID? = nil
+
+    // Batch Editor State
+    @State private var showBatchEditSheet = false
+    @State private var batchEditColumn: String = ""
+    @State private var batchEditValue: String = ""
+
     // Duplicate Scanner State
     @State private var showOnlyDuplicates = false
     
@@ -122,6 +128,7 @@ struct ProjectExportView: View {
     // VFX Indexing State
     @State private var vfxTrack: String = "1"
     @State private var vfxThumbnailTrack: String = "1"
+    @State private var indexAllEpisodes: Bool = false
     
     // Settings
     @AppStorage("thumbnailFormat") private var thumbnailFormat: String = "jpg"
@@ -448,10 +455,10 @@ struct ProjectExportView: View {
         
         // DaVinci Import Sheet
         .sheet(isPresented: $showDaVinciImport) {
-            DaVinciImportSheet(vfxTrack: $vfxTrack) {
+            DaVinciImportSheet(vfxTrack: $vfxTrack, indexAllEpisodes: $indexAllEpisodes, episodesCount: projectManager.currentEpisodes.count) {
                 showDaVinciImport = false
                 if let p = projectManager.currentProject {
-                    runIndexing(project: p)
+                    runIndexing(project: p, allEpisodes: indexAllEpisodes)
                 }
             } onCancel: {
                 showDaVinciImport = false
@@ -745,13 +752,22 @@ struct ProjectExportView: View {
                 }
                 .liquidGlassButton(prominent: false)
                 
+                Button("Batch Edit") {
+                    batchEditColumn = batchEditableColumns.first ?? ""
+                    batchEditValue = ""
+                    showBatchEditSheet = true
+                }
+                .liquidGlassButton(prominent: false)
+                .disabled(selectedForDelete.isEmpty)
+                .help("Set one column to the same value on all \(selectedForDelete.count) selected shots — shift-click a row's checkbox to select a range.")
+
                 Button("Delete Selected") {
                     showDeleteShotsAlert = true
                 }
                 .liquidGlassButton(prominent: true)
                 .tint(.red)
                 .disabled(selectedForDelete.isEmpty)
-                
+
                 Button("Done") {
                     // Save renaming overrides implicitly simply by existing dict mutations
                     var updates: [String: String] = [:]
@@ -769,12 +785,26 @@ struct ProjectExportView: View {
                     }
                     isEditingMasterlist = false
                     selectedForDelete.removeAll()
+                    lastToggledClipId = nil
                 }
                 .liquidGlassButton(prominent: true)
                 .tint(.green)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 16)
+            .sheet(isPresented: $showBatchEditSheet) {
+                BatchEditSheet(
+                    columns: batchEditableColumns,
+                    selectedCount: selectedForDelete.count,
+                    column: $batchEditColumn,
+                    value: $batchEditValue,
+                    onApply: {
+                        applyBatchEdit(column: batchEditColumn, value: batchEditValue)
+                        showBatchEditSheet = false
+                    },
+                    onCancel: { showBatchEditSheet = false }
+                )
+            }
         } else {
             defaultHeaderView(project: project)
         }
@@ -791,6 +821,7 @@ struct ProjectExportView: View {
                     Button(action: {
                         isEditingMasterlist = true
                         selectedForDelete.removeAll()
+                        lastToggledClipId = nil
                     }) {
                         Label("Edit Masterlist", systemImage: "pencil")
                     }
@@ -952,15 +983,35 @@ struct ProjectExportView: View {
         getFilteredIndices(clips: projectManager.currentMasterList)
     }
     
-    private func jumpToResolveTimecode(_ tc: String) {
-        let jsonStr = "{\"tc\": \"\(tc)\"}"
+    private func jumpToResolveTimecode(for clip: ClipData) {
+        guard !clip.tcIn.isEmpty else { return }
+
+        // Resolve which episode this clip belongs to, so we can open the right
+        // timeline before jumping — an explicit "Episode" tag (written during
+        // indexing) wins, falling back to Start-TC-range matching (same logic
+        // as CSV augmentation) when that tag is missing.
+        var targetEpisode: EpisodeData? = nil
+        if !projectManager.currentEpisodes.isEmpty {
+            let taggedNumber = Int(clip.dict["Episode"] ?? "") ?? EpisodeData.matchedEpisodeNumber(for: clip.tcIn, in: projectManager.currentEpisodes)
+            if let number = taggedNumber {
+                targetEpisode = projectManager.currentEpisodes.first { $0.episodeNumber == number }
+            }
+        }
+
+        var payload: [String: String] = ["tc": clip.tcIn]
+        if let episode = targetEpisode {
+            payload["timelineUniqueId"] = episode.timelineUniqueId ?? ""
+            payload["timelineName"] = episode.timelineName
+        }
+
         let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
-        try? jsonStr.write(to: tmpURL, atomically: true, encoding: .utf8)
-        
+        guard let jsonData = try? JSONEncoder().encode(payload) else { return }
+        try? jsonData.write(to: tmpURL)
+
         PyScriptRunner.run(scriptName: "Resolve/Tools/navigate_to_frame", args: [tmpURL.path], showOutput: false, completion: { _ in
             try? FileManager.default.removeItem(at: tmpURL)
         })
-        
+
         let script = "tell application \"DaVinci Resolve\" to activate"
         var error: NSDictionary?
         if let appleScript = NSAppleScript(source: script) {
@@ -980,7 +1031,7 @@ struct ProjectExportView: View {
                 if isEditingMasterlist {
                     Toggle("", isOn: Binding(
                         get: { selectedForDelete.contains(clipBinding.wrappedValue.id) },
-                        set: { if $0 { selectedForDelete.insert(clipBinding.wrappedValue.id) } else { selectedForDelete.remove(clipBinding.wrappedValue.id) } }
+                        set: { _ in handleRowSelectionClick(clipId: clipBinding.wrappedValue.id) }
                     ))
                     .labelsHidden()
                     .frame(width: 30)
@@ -1035,7 +1086,7 @@ struct ProjectExportView: View {
                                 HStack(spacing: 4) {
                                     if let tc = clipBinding.wrappedValue.dict["TC In"], !tc.isEmpty {
                                         Button {
-                                            jumpToResolveTimecode(tc)
+                                            jumpToResolveTimecode(for: clipBinding.wrappedValue)
                                         } label: {
                                             Image(systemName: "arrow.right.circle.fill")
                                                 .foregroundColor(.accentColor)
@@ -1107,6 +1158,54 @@ struct ProjectExportView: View {
             nameCounts[name, default: 0] += 1
         }
         return nameCounts.filter { $0.value > 1 }.map { $0.key }.sorted()
+    }
+
+    // MARK: - Row Selection (Edit Masterlist mode)
+
+    // Plain click toggles a single row; shift-click extends the selection to
+    // every visible row between the last-clicked row and this one (standard
+    // Finder-style range select), leaving the anchor (lastToggledClipId)
+    // where it was so repeated shift-clicks keep extending from the same spot.
+    private func handleRowSelectionClick(clipId: UUID) {
+        if NSEvent.modifierFlags.contains(.shift), let anchorId = lastToggledClipId {
+            let visibleIds = getFilteredIndices(clips: projectManager.currentMasterList).map { projectManager.currentMasterList[$0].id }
+            if let anchorIdx = visibleIds.firstIndex(of: anchorId), let clickedIdx = visibleIds.firstIndex(of: clipId) {
+                let range = anchorIdx <= clickedIdx ? anchorIdx...clickedIdx : clickedIdx...anchorIdx
+                for i in range { selectedForDelete.insert(visibleIds[i]) }
+                return
+            }
+        }
+        if selectedForDelete.contains(clipId) {
+            selectedForDelete.remove(clipId)
+        } else {
+            selectedForDelete.insert(clipId)
+        }
+        lastToggledClipId = clipId
+    }
+
+    // Overwrites `column` with `value` on every currently selected clip —
+    // the Batch Editor's only operation (e.g. assign the first 10 shots to
+    // Episode "1" in one step).
+    private func applyBatchEdit(column: String, value: String) {
+        guard !column.isEmpty else { return }
+        for i in projectManager.currentMasterList.indices {
+            if selectedForDelete.contains(projectManager.currentMasterList[i].id) {
+                projectManager.currentMasterList[i].dict[column] = value
+            }
+        }
+        projectManager.saveMasterList()
+    }
+
+    // Columns offered by the Batch Editor: every active column, plus "Episode"
+    // even if no clip has been tagged with it yet — the whole point of batch
+    // editing is often to backfill Episode assignments by hand for the first
+    // time (e.g. clips indexed before Episodes were registered at all).
+    private var batchEditableColumns: [String] {
+        var cols = activeColumns
+        if !projectManager.currentEpisodes.isEmpty && !cols.contains("Episode") {
+            cols.insert("Episode", at: 0)
+        }
+        return cols
     }
 
     private func getFilteredIndices(clips: [ClipData]) -> [Int] {
@@ -1206,9 +1305,18 @@ struct ProjectExportView: View {
             for (i, colName) in originalHeader.enumerated() {
                 dict[colName] = i < row.count ? row[i] : ""
             }
-            if scenesEnabled, let tcIdx = recTcInIdx {
-                let tc = tcIdx < row.count ? row[tcIdx] : ""
+            let tc = recTcInIdx.map { $0 < row.count ? row[$0] : "" } ?? ""
+            if scenesEnabled {
                 dict["Scene"] = SceneData.matchedSceneName(for: tc, in: projectManager.currentScenes) ?? ""
+            }
+            // clip-indexing.py already tags "Episode" exactly when it indexed the matching
+            // timeline directly. Fall back to Start-TC-range matching (same idea as Scene
+            // matching above) only when that exact tag is missing/empty — e.g. a plain CSV
+            // import that never went through a specific timeline.
+            if episodesEnabled, (dict["Episode"] ?? "").isEmpty {
+                if let number = EpisodeData.matchedEpisodeNumber(for: tc, in: projectManager.currentEpisodes) {
+                    dict["Episode"] = String(number)
+                }
             }
             dataDicts.append(dict)
         }
@@ -1242,13 +1350,13 @@ struct ProjectExportView: View {
         self.showMergeReview = true
     }
     
-    private func runIndexing(project: Project) {
+    private func runIndexing(project: Project, allEpisodes: Bool = false) {
         isIndexing = true
-        loadingMessage = "Connecting to Resolve..."
-        
+        loadingMessage = allEpisodes ? "Connecting to Resolve... (indexing all episodes)" : "Connecting to Resolve..."
+
         projectManager.updateVfxTrack(projectId: project.id, track: vfxTrack)
         let endMarkerArg = project.vfxEndMarkerEnabled == true ? "true" : "false"
-        
+
         var renamingMapArg = ""
         if let map = project.vfxRenamingMap, !map.isEmpty {
             do {
@@ -1260,10 +1368,13 @@ struct ProjectExportView: View {
         }
 
         // Episode mapping: lets the indexing script tag every clip with the
-        // Episode number of whichever registered timeline is currently being indexed.
+        // Episode number of whichever registered timeline is currently being
+        // indexed (single-timeline mode), or resolve every registered
+        // timeline by uniqueId/name to auto-open + index them all in turn
+        // ("Index All Episodes" mode, see clip-indexing.py's find_timeline).
         var episodesMapArg = ""
         if !projectManager.currentEpisodes.isEmpty {
-            let mapping = projectManager.currentEpisodes.map { ["timelineName": $0.timelineName, "episodeNumber": $0.episodeNumber] as [String: Any] }
+            let mapping = projectManager.currentEpisodes.map { ["timelineName": $0.timelineName, "timelineUniqueId": $0.timelineUniqueId ?? "", "episodeNumber": $0.episodeNumber] as [String: Any] }
             do {
                 let data = try JSONSerialization.data(withJSONObject: mapping)
                 let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent("resolver_episodes_map.json")
@@ -1271,11 +1382,12 @@ struct ProjectExportView: View {
                 episodesMapArg = tmpURL.path
             } catch { print("Failed to encode episodes map") }
         }
+        let allEpisodesArg = allEpisodes ? "true" : "false"
 
         // Always pass positionally (empty string when unused) so argument
         // indices in the Python script never shift depending on which
         // optional features are active.
-        let args = [vfxTrack, endMarkerArg, renamingMapArg, episodesMapArg]
+        let args = [vfxTrack, endMarkerArg, renamingMapArg, episodesMapArg, allEpisodesArg]
 
         PyScriptRunner.run(scriptName: "Resolve/VFX/clip-indexing", args: args, showOutput: false, onProgress: { progressLine in
             if let range = progressLine.range(of: "PROGRESS: ") {

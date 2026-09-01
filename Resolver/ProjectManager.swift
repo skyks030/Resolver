@@ -146,6 +146,26 @@ struct EpisodeData: Codable, Identifiable, Equatable {
     var timelineName: String
     var timelineUniqueId: String? = nil
     var episodeNumber: Int = 1
+    var startTC: String? = nil
+
+    // Shared episode-matching logic, mirroring SceneData.matchedSceneName:
+    // which registered episode a given Record TC falls into (episodes are
+    // ranges from their startTC up to the next episode's startTC). Used as a
+    // fallback when a clip's "Episode" column wasn't tagged directly during
+    // per-timeline indexing (e.g. a plain CSV import).
+    static func matchedEpisodeNumber(for tc: String, in episodes: [EpisodeData]) -> Int? {
+        let cleanTC = tc.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleanTC.isEmpty { return nil }
+        var matchedNumber: Int? = nil
+        let dated = episodes.compactMap { ep -> (String, Int)? in
+            guard let start = ep.startTC, !start.isEmpty else { return nil }
+            return (start, ep.episodeNumber)
+        }
+        for (start, number) in dated.sorted(by: { $0.0 < $1.0 }) {
+            if cleanTC >= start { matchedNumber = number } else { break }
+        }
+        return matchedNumber
+    }
 }
 
 // Persisted VFX Name Generator schema, so a project remembers its naming
@@ -385,7 +405,10 @@ class ProjectManager: ObservableObject {
                     if cols.count >= 4, let uuid = UUID(uuidString: cols[0]) {
                         let uniqueId = cols[2].isEmpty ? nil : cols[2]
                         let number = Int(cols[3]) ?? 1
-                        loaded.append(EpisodeData(id: uuid, timelineName: cols[1], timelineUniqueId: uniqueId, episodeNumber: number))
+                        // startTC is a 5th column added later; older Episodes.csv files won't
+                        // have it, so only read it when present.
+                        let startTC = (cols.count >= 5 && !cols[4].isEmpty) ? cols[4] : nil
+                        loaded.append(EpisodeData(id: uuid, timelineName: cols[1], timelineUniqueId: uniqueId, episodeNumber: number, startTC: startTC))
                     }
                 }
                 currentEpisodes = loaded
@@ -402,11 +425,12 @@ class ProjectManager: ObservableObject {
     func saveEpisodes() {
         guard let proj = currentProject else { return }
         let url = episodesUrl(for: proj.id)
-        var csv = "id,timelineName,timelineUniqueId,episodeNumber\n"
+        var csv = "id,timelineName,timelineUniqueId,episodeNumber,startTC\n"
         for episode in currentEpisodes {
             let safeTimelineName = episode.timelineName.replacingOccurrences(of: ",", with: ";")
             let safeUniqueId = (episode.timelineUniqueId ?? "").replacingOccurrences(of: ",", with: "")
-            csv += "\(episode.id.uuidString),\(safeTimelineName),\(safeUniqueId),\(episode.episodeNumber)\n"
+            let safeStartTC = (episode.startTC ?? "").replacingOccurrences(of: ",", with: "")
+            csv += "\(episode.id.uuidString),\(safeTimelineName),\(safeUniqueId),\(episode.episodeNumber),\(safeStartTC)\n"
         }
         do {
             try csv.write(to: url, atomically: true, encoding: .utf8)

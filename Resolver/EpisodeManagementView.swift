@@ -240,12 +240,13 @@ struct EpisodeManagementView: View {
                 var episode = existing[idx]
                 episode.timelineName = tl.name
                 episode.timelineUniqueId = tl.uniqueId
+                episode.startTC = tl.startTC
                 merged.append(episode)
                 existing.remove(at: idx)
             } else {
                 let nextNumber = (usedNumbers.max() ?? 0) + 1
                 usedNumbers.insert(nextNumber)
-                merged.append(EpisodeData(timelineName: tl.name, timelineUniqueId: tl.uniqueId, episodeNumber: nextNumber))
+                merged.append(EpisodeData(timelineName: tl.name, timelineUniqueId: tl.uniqueId, episodeNumber: nextNumber, startTC: tl.startTC))
             }
         }
 

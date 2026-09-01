@@ -25,6 +25,8 @@ try:
 
     target_frame = int(data.get("frame", 0))
     target_tc = data.get("tc")
+    target_timeline_unique_id = data.get("timelineUniqueId")
+    target_timeline_name = data.get("timelineName")
 
     # === Helpers ===
     def frames_to_tc(frames, fps):
@@ -67,6 +69,45 @@ try:
         if not project:
              raise Exception("No active project")
 
+        # If the clip being jumped to belongs to a specific registered episode,
+        # switch to that episode's timeline first so the clip is actually
+        # reachable — jumping to a raw TC only makes sense within the right
+        # timeline. Falls back to whatever is currently open if no match is
+        # found (e.g. no episodes registered, or the timeline was renamed).
+        if target_timeline_unique_id or target_timeline_name:
+            try:
+                count = int(project.GetTimelineCount() or 0)
+            except Exception:
+                count = 0
+            match_by_name = None
+            for i in range(1, count + 1):
+                try:
+                    tl = project.GetTimelineByIndex(i)
+                except Exception:
+                    tl = None
+                if not tl:
+                    continue
+                if target_timeline_unique_id and hasattr(tl, "GetUniqueId"):
+                    try:
+                        if tl.GetUniqueId() == target_timeline_unique_id:
+                            match_by_name = tl
+                            break
+                    except Exception:
+                        pass
+                if match_by_name is None and target_timeline_name:
+                    try:
+                        if tl.GetName() == target_timeline_name:
+                            match_by_name = tl
+                    except Exception:
+                        pass
+            if match_by_name is not None:
+                current = project.GetCurrentTimeline()
+                already_current = current is not None and current.GetName() == match_by_name.GetName()
+                if not already_current:
+                    project.SetCurrentTimeline(match_by_name)
+            else:
+                print(json.dumps({"status": "debug", "message": f"Target timeline '{target_timeline_name}' not found, navigating in the currently open timeline instead."}))
+
         timeline = project.GetCurrentTimeline()
         if not timeline:
              raise Exception("No active timeline")
@@ -74,8 +115,6 @@ try:
     except Exception as e:
         raise Exception(f"Resolve API Error: {str(e)}")
 
-    # === Navigate ===
-    # === Navigate ===
     # === Navigate ===
     try:
         navigated = False

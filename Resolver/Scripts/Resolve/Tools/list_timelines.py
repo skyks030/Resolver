@@ -188,19 +188,24 @@ def main():
     except Exception:
         media_pool_names = []
 
-    # De-duplicate while preserving discovery order
+    # Union of the Timeline registry (every timeline Resolve knows about,
+    # index 1..count) and whatever the Media Pool walk found, de-duplicated
+    # while preserving discovery order. This must be a union, not "prefer one,
+    # fall back to the other only if empty": an AAF/XML/EDL-imported timeline
+    # can land in a bin or report a clip 'Type' the recursive walk doesn't
+    # recognize, and previously that silently dropped it from the list even
+    # though the registry already had it. Registry names go first since they
+    # are the authoritative source.
     seen = set()
     ordered_names = []
+    for name in timeline_meta_by_name.keys():
+        if name not in seen:
+            seen.add(name)
+            ordered_names.append(name)
     for name in media_pool_names:
         if name not in seen:
             seen.add(name)
             ordered_names.append(name)
-
-    # Fallback: if Media Pool traversal found nothing usable (e.g. older API
-    # surface without clip 'Type' property support), fall back to the
-    # Timeline registry directly so the feature still works.
-    if not ordered_names:
-        ordered_names = list(timeline_meta_by_name.keys())
 
     timelines = []
     for name in ordered_names:
