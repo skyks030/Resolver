@@ -194,7 +194,12 @@ struct EpisodeManagementView: View {
             DispatchQueue.main.async {
                 self.isIndexing = false
 
-                guard let output = output, let data = output.data(using: .utf8) else {
+                // list_timelines.py now prints debug breadcrumbs (visible in Debug Mode) before
+                // its actual result, so pull out the last JSON-looking line rather than trying
+                // to decode the whole multi-line output as one document.
+                guard let output = output,
+                      let jsonLine = PyScriptRunner.lastJSONLine(in: output),
+                      let data = jsonLine.data(using: .utf8) else {
                     self.indexingError = "No response from DaVinci Resolve."
                     return
                 }

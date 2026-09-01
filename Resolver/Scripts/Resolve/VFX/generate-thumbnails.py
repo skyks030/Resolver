@@ -8,12 +8,19 @@ import time
 import subprocess
 import traceback
 
+def log(message):
+    """Debug breadcrumb, shown in Resolver's Debug Mode console. Every meaningful step prints
+    one of these so a hang or crash can be pinpointed to the exact step it happened at."""
+    print(json.dumps({"status": "debug", "message": message}))
+    sys.stdout.flush()
+
 # === Load JSON Payload ===
 if len(sys.argv) < 2:
     print(json.dumps({"error": "Missing JSON input file path"}))
     sys.exit(1)
 
 json_path = sys.argv[1]
+log(f"Loading payload from {json_path}")
 
 if not os.path.exists(json_path):
     print(json.dumps({"error": f"JSON file not found: {json_path}"}))
@@ -100,18 +107,18 @@ try:
     spec.loader.exec_module(dvr)
 
     import DaVinciResolveScript as dvr
-    print(json.dumps({"status": "debug", "message": "Connecting to Resolve..."}))
+    log("Connecting to Resolve...")
     resolve = dvr.scriptapp("Resolve")
 
     if not resolve:
         raise Exception("Could not connect to Resolve (scriptapp returned None)")
 
-    print(json.dumps({"status": "debug", "message": "Getting Project Manager..."}))
+    log("Getting Project Manager...")
     pm = resolve.GetProjectManager()
     if not pm:
         raise Exception("GetProjectManager() returned None")
 
-    print(json.dumps({"status": "debug", "message": "Getting Current Project..."}))
+    log("Getting Current Project...")
     project = pm.GetCurrentProject()
     if not project:
          raise Exception("No active project")
@@ -120,8 +127,10 @@ try:
     # only a problem for a clip whose own timeline hint can't be resolved either, so don't gate
     # on it up front.
     original_timeline = project.GetCurrentTimeline()
+    log(f"Original timeline: {original_timeline.GetName() if original_timeline else 'None currently open'}")
 
     target_track_index = int(data.get("targetTrack", 1))
+    log(f"{len(clips)} shot(s) requested, target track={target_track_index}")
 
     # Group clips by resolved target timeline (per-clip "timelineUniqueId"/"timelineName", set
     # client-side from the Episode Manager). A clip with no hint — or an unresolvable one — falls
@@ -156,16 +165,17 @@ try:
     if not groups_by_timeline:
         raise Exception("No active timeline, and none of the provided shots resolved to a registered episode timeline.")
     if skipped_no_timeline:
-        print(json.dumps({"status": "debug", "message": f"Skipped {skipped_no_timeline} shot(s) with no resolvable timeline."}))
+        log(f"Skipped {skipped_no_timeline} shot(s) with no resolvable timeline.")
+    log(f"Grouped {len(clips)} shot(s) into {len(groups_by_timeline)} timeline group(s): {[tl.GetName() for tl, _ in groups_by_timeline]}")
 
     # WRAP EVERYTHING in try/finally to ensure the originally-open timeline is restored
     try:
-        print(json.dumps({"status": "debug", "message": "Switching to Color Page..."}))
+        log("Switching to Color Page...")
         if not resolve.OpenPage("color"):
-             print(json.dumps({"status": "debug", "message": "OpenPage returned False (might be already open or failed)"}))
+             log("OpenPage returned False (might be already open or failed)")
 
         # === Gallery / Album Management (project-level, done once) ===
-        print(json.dumps({"status": "debug", "message": "Getting Gallery..."}))
+        log("Getting Gallery...")
         gallery = project.GetGallery()
         if not gallery:
             raise Exception("Could not access Gallery (GetGallery returned None)")
@@ -176,7 +186,7 @@ try:
         # 2. If valid albums exist, use the first one.
         # 3. Only try to find "resolver_temp_stills" if we have options, but don't force it if it breaks things.
 
-        print(json.dumps({"status": "debug", "message": "Getting Current Still Album..."}))
+        log("Getting Current Still Album...")
 
         albums = gallery.GetGalleryStillAlbums()
         target_album = gallery.GetCurrentStillAlbum()
@@ -193,7 +203,7 @@ try:
                  else:
                      print(json.dumps({"status": "error", "message": "Failed to rename nameless album."}))
 
-             print(json.dumps({"status": "debug", "message": f"Using album: {lbl}"}))
+             log(f"Using album: {lbl}")
              gallery.SetCurrentStillAlbum(target_album)
 
         if not target_album:
@@ -206,13 +216,18 @@ try:
         total_clips = len(clips)
 
         print(json.dumps({"status": "starting", "count": total_clips}))
+        print(f"PROGRESS: 0/{max(total_clips, 1)}")
+        sys.stdout.flush()
 
         for timeline, group_clips in groups_by_timeline:
+            log(f"Switching to timeline '{timeline.GetName()}' ({len(group_clips)} shot(s))...")
             try:
                 project.SetCurrentTimeline(timeline)
             except Exception as e:
                 print(json.dumps({"status": "error", "message": f"Failed to switch to timeline '{timeline.GetName()}', skipping {len(group_clips)} shots: {e}"}))
                 processed_count += len(group_clips)
+                print(f"PROGRESS: {processed_count}/{total_clips}")
+                sys.stdout.flush()
                 continue
 
             # === Track Management (per timeline — each timeline has its own track layout) ===
@@ -267,6 +282,7 @@ try:
                             gallery.SetCurrentStillAlbum(target_album)
 
                         # Grab Still
+                        log(f"Grabbing still for '{name}' at {target_tc or frame_start} ({processed_count + 1}/{total_clips})...")
                         still = timeline.GrabStill()
                         time.sleep(0.05) # Brief pause to ensures still is ready
 
@@ -406,10 +422,12 @@ try:
                 for i, state in track_states.items():
                     if hasattr(timeline, "SetTrackEnable"):
                         timeline.SetTrackEnable("video", i, state)
+            log(f"Finished timeline '{timeline.GetName()}'. Total processed so far: {processed_count}/{total_clips}")
     finally:
         # Restore whatever timeline was open before this run, so Resolve's UI doesn't end up
         # parked on the last-processed episode.
         if original_timeline is not None:
+            log(f"Restoring original timeline '{original_timeline.GetName()}'...")
             try:
                 project.SetCurrentTimeline(original_timeline)
             except Exception:
@@ -417,6 +435,7 @@ try:
 
     # === Cleanup .drx files ===
     # Resolve exports .drx files with stills (grading data). We only want the images.
+    log("Cleaning up .drx files...")
     try:
         if os.path.exists(output_dir):
             for filename in os.listdir(output_dir):
@@ -426,6 +445,7 @@ try:
     except Exception as cleanup_Ex:
         print(f"Warning: Failed to cleanup .drx files: {cleanup_Ex}")
 
+    log(f"Done. processed={processed_count}/{total_clips}")
     print(json.dumps({"status": "success", "processed": processed_count, "folder": output_dir}))
 
 except Exception as e:

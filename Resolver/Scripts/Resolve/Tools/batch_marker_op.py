@@ -5,12 +5,19 @@ import os
 import importlib.util
 import json
 
+def log(message):
+    """Debug breadcrumb, shown in Resolver's Debug Mode console. Every meaningful step prints
+    one of these so a hang or crash can be pinpointed to the exact step it happened at."""
+    print(json.dumps({"status": "debug", "message": message}))
+    sys.stdout.flush()
+
 # === Load JSON Payload ===
 if len(sys.argv) < 2:
     print(json.dumps({"error": "Missing JSON input file path"}))
     sys.exit(1)
 
 json_path = sys.argv[1]
+log(f"Loading payload from {json_path}")
 
 if not os.path.exists(json_path):
     print(json.dumps({"error": f"JSON file not found: {json_path}"}))
@@ -28,6 +35,7 @@ markers = data.get("markers", [])
 # Every registered episode's timeline (only needed by "delete_all_vfx", which has no per-marker
 # list to carry timeline hints on) — see EpisodeManagementView / ProjectExportView.performBatchOp.
 episodes = data.get("episodes") or []
+log(f"action={action}, markers={len(markers)}, registered episodes={len(episodes)}")
 
 if not action or action not in ["create", "delete", "delete_all_vfx"]:
     print(json.dumps({"error": "Invalid action. Must be 'create', 'delete', or 'delete_all_vfx'."}))
@@ -75,6 +83,7 @@ def find_timeline(project, unique_id, name):
 
 try:
     # === Resolve API Setup ===
+    log("Loading DaVinci Resolve Scripting API...")
     sdk_path = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules"
     sdk_file = os.path.join(sdk_path, "DaVinciResolveScript.py")
 
@@ -83,16 +92,19 @@ try:
     spec.loader.exec_module(dvr)
 
     import DaVinciResolveScript as dvr
+    log("Connecting to Resolve...")
     resolve = dvr.scriptapp("Resolve")
 
     if not resolve:
         raise Exception("Could not connect to Resolve")
 
+    log("Getting current project...")
     project = resolve.GetProjectManager().GetCurrentProject()
     if not project:
          raise Exception("No active project")
 
     original_timeline = project.GetCurrentTimeline()
+    log(f"Original timeline: {original_timeline.GetName() if original_timeline else 'None currently open'}")
 
     count = 0
     failed_count = 0
@@ -106,27 +118,61 @@ try:
                 tl = find_timeline(project, ep.get("timelineUniqueId"), ep.get("timelineName"))
                 if tl is not None:
                     target_timelines.append(tl)
+                else:
+                    log(f"Could not resolve timeline for episode '{ep.get('timelineName')}', skipping.")
         if not target_timelines:
             if not original_timeline:
                 raise Exception("No active timeline")
             target_timelines = [original_timeline]
+        log(f"Scanning {len(target_timelines)} timeline(s) for existing VFX markers: {[t.GetName() for t in target_timelines]}")
 
+        # Two passes so the UI can show a real "x/y processed" counter instead of an unknown
+        # total: first count how many "Resolver VFX-Marker" notes exist across every target
+        # timeline, then delete them while reporting progress against that count.
+        to_delete = []  # [(timeline, frame_id, color)]
         for timeline in target_timelines:
             try:
                 project.SetCurrentTimeline(timeline)
             except Exception as e:
-                print(json.dumps({"status": "debug", "message": f"Failed to switch to timeline '{timeline.GetName()}', skipping: {e}"}))
+                log(f"Failed to switch to timeline '{timeline.GetName()}' for scanning, skipping: {e}")
                 continue
 
             markers_dict = timeline.GetMarkers()
+            found_here = 0
             if markers_dict:
                 for frame_id, marker_info in markers_dict.items():
                     note = marker_info.get("note", "")
                     if "Resolver VFX-Marker" in note:
-                        if timeline.DeleteMarkerAtFrame(frame_id, marker_info.get("color", "")):
-                            count += 1
-                        else:
-                            failed_count += 1
+                        to_delete.append((timeline, frame_id, marker_info.get("color", "")))
+                        found_here += 1
+            log(f"Timeline '{timeline.GetName()}': found {found_here} VFX marker(s) to delete.")
+
+        total_to_delete = len(to_delete)
+        print(f"PROGRESS: 0/{max(total_to_delete, 1)}")
+        sys.stdout.flush()
+
+        current_timeline_for_delete = None
+        for i, (timeline, frame_id, color) in enumerate(to_delete):
+            if timeline is not current_timeline_for_delete:
+                try:
+                    project.SetCurrentTimeline(timeline)
+                    current_timeline_for_delete = timeline
+                except Exception as e:
+                    log(f"Failed to switch to timeline '{timeline.GetName()}' for deletion, skipping its markers: {e}")
+                    failed_count += 1
+                    # Still advance the counter — otherwise the progress bar visually stalls for
+                    # this whole timeline's markers instead of reflecting that they were skipped.
+                    print(f"PROGRESS: {i + 1}/{total_to_delete}")
+                    sys.stdout.flush()
+                    continue
+
+            if timeline.DeleteMarkerAtFrame(frame_id, color):
+                count += 1
+            else:
+                failed_count += 1
+
+            print(f"PROGRESS: {i + 1}/{total_to_delete}")
+            sys.stdout.flush()
 
         if original_timeline is not None:
             try:
@@ -168,12 +214,22 @@ try:
         if not groups_by_timeline:
             raise Exception("No active timeline, and none of the provided markers resolved to a registered episode timeline.")
 
+        log(f"Grouped {len(markers)} marker(s) into {len(groups_by_timeline)} timeline group(s): {[tl.GetName() for tl, _ in groups_by_timeline]}")
+
+        total_markers = len(markers)
+        processed = 0
+        print(f"PROGRESS: 0/{max(total_markers, 1)}")
+        sys.stdout.flush()
+
         for timeline, group_markers in groups_by_timeline:
             try:
                 project.SetCurrentTimeline(timeline)
             except Exception as e:
-                print(json.dumps({"status": "debug", "message": f"Failed to switch to timeline '{timeline.GetName()}', skipping {len(group_markers)} markers: {e}"}))
+                log(f"Failed to switch to timeline '{timeline.GetName()}', skipping {len(group_markers)} markers: {e}")
                 failed_count += len(group_markers)
+                processed += len(group_markers)
+                print(f"PROGRESS: {processed}/{total_markers}")
+                sys.stdout.flush()
                 continue
 
             start_frame = int(timeline.GetStartFrame())
@@ -181,7 +237,7 @@ try:
             fps_raw = timeline.GetSetting("timelineFrameRate")
             fps = float(fps_raw) if fps_raw else 25.0
             start_tc_frames = tc_to_frames(start_tc, fps)
-            print(json.dumps({"status": "debug", "message": f"Timeline '{timeline.GetName()}' Start Frame: {start_frame}, Start TC: {start_tc}, FPS: {fps}"}))
+            log(f"Timeline '{timeline.GetName()}' Start Frame: {start_frame}, Start TC: {start_tc}, FPS: {fps} — processing {len(group_markers)} marker(s)")
 
             if action == "delete":
                 # DeleteMarkerAtFrame expects Absolute Frame and Color
@@ -205,6 +261,10 @@ try:
                         else:
                             failed_count += 1
 
+                    processed += 1
+                    print(f"PROGRESS: {processed}/{total_markers}")
+                    sys.stdout.flush()
+
             elif action == "create":
                 for m in group_markers:
                     if "tc" in m and m["tc"]:
@@ -226,12 +286,17 @@ try:
                     else:
                         failed_count += 1
 
+                    processed += 1
+                    print(f"PROGRESS: {processed}/{total_markers}")
+                    sys.stdout.flush()
+
         if original_timeline is not None:
             try:
                 project.SetCurrentTimeline(original_timeline)
             except Exception:
                 pass
 
+    log(f"Done. count={count}, failed={failed_count}")
     print(json.dumps({
         "status": "success",
         "count": count,

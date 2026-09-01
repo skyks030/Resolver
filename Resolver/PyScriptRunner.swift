@@ -2,6 +2,20 @@ import Foundation
 import AppKit
 
 class PyScriptRunner {
+    // Several scripts now print debug/progress breadcrumbs (visible in Debug Mode) ahead of
+    // their actual final JSON result, so the combined stdout+stderr string handed to a
+    // `completion` closure is no longer guaranteed to be a single JSON document — it's one
+    // status/debug object per line, then the real result last. Callers that need to decode a
+    // specific typed result out of that should pull out this last JSON-looking line first,
+    // rather than decoding the whole raw string (which would fail to parse) or naively slicing
+    // between the first "{" and the last "}" (which breaks once there's more than one object).
+    static func lastJSONLine(in output: String) -> String? {
+        output
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .last(where: { $0.hasPrefix("{") && $0.hasSuffix("}") })
+    }
+
     static func run(scriptName: String, args: [String] = [], showOutput: Bool = false, enableDownload: Bool = false, onProgress: ((String) -> Void)? = nil, completion: ((String?) -> Void)? = nil) {
 
         // Dev Mode: Check if local file exists

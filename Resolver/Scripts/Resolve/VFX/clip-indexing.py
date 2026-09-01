@@ -51,6 +51,12 @@ def safe_csv(val):
     # Instead of importing csv module, just replace commas with semicolons for safety
     return str(val).replace(",", ";")
 
+def log(message):
+    """Debug breadcrumb, shown in Resolver's Debug Mode console. Every meaningful step prints
+    one of these so a hang or crash can be pinpointed to the exact step it happened at."""
+    print(json.dumps({"status": "debug", "message": message}))
+    sys.stdout.flush()
+
 def extract_timeline_rows(timeline, target_track_index, episode_number, out_f, progress_base, progress_total):
     """Scans one timeline's target video track and writes a CSV row per clip,
     tagging every row with episode_number (may be ""). progress_base/
@@ -171,16 +177,19 @@ try:
     if not os.path.exists(sdk_file):
         raise FileNotFoundError(f"SDK-Datei nicht gefunden: {sdk_file}")
 
+    log("Loading DaVinci Resolve Scripting API...")
     spec = importlib.util.spec_from_file_location("DaVinciResolveScript", sdk_file)
     dvr = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(dvr)
 
     import DaVinciResolveScript as dvr
+    log("Connecting to Resolve...")
     resolve = dvr.scriptapp("Resolve")
     if not resolve:
         raise ConnectionError("Verbindung zu DaVinci Resolve konnte nicht hergestellt werden.")
 
     # === Projekt & Timeline ===
+    log("Getting project manager and current project...")
     pm = resolve.GetProjectManager()
     project = pm.GetCurrentProject()
 
@@ -192,6 +201,7 @@ try:
     # of an all-episodes run so Resolve's UI doesn't stay parked on whichever
     # episode was indexed last.
     original_timeline = project.GetCurrentTimeline()
+    log(f"Original timeline: {original_timeline.GetName() if original_timeline else 'None currently open'}")
 
     # === Input Argumente ===
     # Positional args are always passed (as "" when unused) by the Swift side,
@@ -231,6 +241,7 @@ try:
     # "Index All Episodes": auto-open + index every registered episode's
     # timeline in one pass instead of just whatever is currently open.
     all_episodes = len(sys.argv) > 5 and sys.argv[5].lower() == "true"
+    log(f"target_track={target_track_index}, all_episodes={all_episodes}, registered episodes={len(episodes_list)}")
 
     # === Resolve what we're about to index, and validate it, BEFORE touching
     # RESOLVER_OUTPUT_FILE. PyScriptRunner treats "output file exists and is
@@ -245,16 +256,19 @@ try:
         # front, in episode-number order, skipping (not failing on) any whose
         # timeline can no longer be found — e.g. renamed/deleted since the
         # Episode Manager last re-indexed.
+        log(f"Resolving {len(episodes_list)} registered episode(s) to Timeline objects...")
         resolved = []
         for ep in sorted(episodes_list, key=lambda e: e.get("episodeNumber", 0)):
             tl = find_timeline(project, ep.get("timelineUniqueId"), ep.get("timelineName"))
             if tl is None:
-                print(json.dumps({"status": "debug", "message": f"Episode {ep.get('episodeNumber')} timeline '{ep.get('timelineName')}' not found, skipping."}))
+                log(f"Episode {ep.get('episodeNumber')} timeline '{ep.get('timelineName')}' not found, skipping.")
                 continue
             resolved.append((tl, str(ep.get("episodeNumber", ""))))
 
         if not resolved:
             raise ValueError("Keine der registrierten Episoden-Timelines wurde im Projekt gefunden.")
+
+        log(f"Resolved {len(resolved)}/{len(episodes_list)} episode(s): {[tl.GetName() for tl, _ in resolved]}")
 
         # Pre-count clips across every resolved timeline so 'PROGRESS: x/y' is
         # accurate for the whole multi-episode run, not just the last timeline.
@@ -266,6 +280,7 @@ try:
                 items = []
             counts.append(len(items))
         total_count = sum(counts)
+        log(f"Total clips to index across all resolved episodes: {total_count} ({dict(zip([tl.GetName() for tl, _ in resolved], counts))})")
     else:
         if original_timeline is None:
             raise ValueError("Keine Timeline in DaVinci Resolve geöffnet.")
@@ -284,8 +299,10 @@ try:
             total_count = len(original_timeline.GetItemListInTrack("video", target_track_index) or [])
         except Exception:
             total_count = 0
+        log(f"Single-timeline mode on '{timeline_name}' (episode={episode_number or 'none'}): {total_count} clip(s) to index on track {target_track_index}")
 
     # === START STREAMING OUTPUT === (only reached once validation above succeeded)
+    log(f"Opening output stream ({'RESOLVER_OUTPUT_FILE: ' + output_file_path if output_file_path else 'stdout'})...")
     if output_file_path:
         out_f = open(output_file_path, 'w', encoding='utf-8')
     else:
@@ -298,22 +315,27 @@ try:
     if all_episodes and episodes_list:
         progress_base = 0
         for (tl, episode_number), count in zip(resolved, counts):
+            log(f"Switching to episode {episode_number} timeline '{tl.GetName()}' ({count} clip(s))...")
             try:
                 project.SetCurrentTimeline(tl)
             except Exception as e:
-                print(json.dumps({"status": "debug", "message": f"Failed to switch to episode {episode_number} timeline, skipping: {e}"}))
+                log(f"Failed to switch to episode {episode_number} timeline, skipping: {e}")
                 progress_base += count
                 continue
             extract_timeline_rows(tl, target_track_index, episode_number, out_f, progress_base, total_count)
+            log(f"Finished episode {episode_number} timeline '{tl.GetName()}'.")
             progress_base += count
 
         if original_timeline is not None:
+            log(f"Restoring original timeline '{original_timeline.GetName()}'...")
             try:
                 project.SetCurrentTimeline(original_timeline)
             except Exception:
                 pass
     else:
         extract_timeline_rows(original_timeline, target_track_index, episode_number, out_f, 0, total_count)
+
+    log("All timelines processed, finishing up...")
 
     # Cleanup
     if output_file_path:

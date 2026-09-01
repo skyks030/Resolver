@@ -362,12 +362,12 @@ struct ProjectExportView: View {
             Button("Cancel", role: .cancel) { }
         }
         .overlay {
-            if isIndexing || isProcessing {
+            if isIndexing || isProcessing || isRunningBatchOp {
                 LoadingOverlay(
                     message: loadingMessage.isEmpty ? (isIndexing ? "Indexing VFX Clips..." : "Processing...") : loadingMessage,
-                    progress: (isIndexing || isProcessing) ? indexingProgress : nil,
-                    current: (isIndexing || isProcessing) ? indexingCurrent : nil,
-                    total: (isIndexing || isProcessing) ? indexingTotal : nil
+                    progress: indexingProgress,
+                    current: indexingCurrent,
+                    total: indexingTotal
                 )
             }
         }
@@ -1363,8 +1363,35 @@ struct ProjectExportView: View {
         self.showMergeReview = true
     }
     
+    // MARK: - Progress reporting (shared by indexing, batch ops, thumbnails)
+
+    // Parses a "PROGRESS: x/y" line (as printed by clip-indexing.py, clip-grouping.py,
+    // batch_marker_op.py and generate-thumbnails.py) and updates the shared progress state that
+    // drives the LoadingOverlay's counter. On a project with 100+ VFX shots these operations can
+    // take a while, so this is what actually lets the user see how far along a run is — and,
+    // since it only advances after each shot/marker is fully processed, where exactly a run got
+    // stuck if it never finishes.
+    private func handleProgressLine(_ progressLine: String) {
+        guard let range = progressLine.range(of: "PROGRESS: ") else { return }
+        let valueStr = String(progressLine[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = valueStr.components(separatedBy: "/")
+        guard parts.count == 2, let current = Int(parts[0]), let total = Int(parts[1]) else { return }
+        DispatchQueue.main.async {
+            self.indexingCurrent = current
+            self.indexingTotal = total
+            if total > 0 { self.indexingProgress = Double(current) / Double(total) }
+        }
+    }
+
+    private func resetProgressState() {
+        indexingCurrent = 0
+        indexingTotal = 0
+        indexingProgress = 0
+    }
+
     private func runIndexing(project: Project, allEpisodes: Bool = false) {
         isIndexing = true
+        resetProgressState()
         loadingMessage = allEpisodes ? "Connecting to Resolve... (indexing all episodes)" : "Connecting to Resolve..."
 
         projectManager.updateVfxTrack(projectId: project.id, track: vfxTrack)
@@ -1402,35 +1429,45 @@ struct ProjectExportView: View {
         // optional features are active.
         let args = [vfxTrack, endMarkerArg, renamingMapArg, episodesMapArg, allEpisodesArg]
 
-        PyScriptRunner.run(scriptName: "Resolve/VFX/clip-indexing", args: args, showOutput: false, onProgress: { progressLine in
-            if let range = progressLine.range(of: "PROGRESS: ") {
-                let valueStr = String(progressLine[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-                let parts = valueStr.components(separatedBy: "/")
-                if parts.count == 2, let current = Int(parts[0]), let total = Int(parts[1]) {
-                     DispatchQueue.main.async {
-                         self.indexingCurrent = current
-                         self.indexingTotal = total
-                         if total > 0 { self.indexingProgress = Double(current) / Double(total) }
-                     }
-                }
-            }
-        }) { output in
+        ConsoleLogger.shared.log("▶️ Indexing starting: track=\(vfxTrack) allEpisodes=\(allEpisodes) episodes=\(projectManager.currentEpisodes.count)")
+        PyScriptRunner.run(scriptName: "Resolve/VFX/clip-indexing", args: args, showOutput: false, onProgress: handleProgressLine) { output in
             DispatchQueue.main.async {
                 self.isIndexing = false
                 self.loadingMessage = ""
-                guard let output = output else { return }
-                
+                guard let output = output, !output.isEmpty else {
+                    ConsoleLogger.shared.log("❌ Indexing produced no output.")
+                    self.showIndexingError = true
+                    self.indexingErrorMessage = "No response from DaVinci Resolve. Check Debug Mode for details."
+                    return
+                }
+
+                // clip-indexing.py's real payload always starts with this exact CSV header; any
+                // other content means the run failed (validation error or crash) and must be
+                // surfaced as an error rather than silently opened as if it were real import data.
+                guard output.hasPrefix("Clip Name,") else {
+                    ConsoleLogger.shared.log("❌ Indexing failed. Raw output:\n\(output)")
+                    self.showIndexingError = true
+                    if let range = output.range(of: "Fehler im Indexing-Script: ") {
+                        self.indexingErrorMessage = String(output[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    } else {
+                        self.indexingErrorMessage = "Indexing failed. Check Debug Mode for details."
+                    }
+                    return
+                }
+
+                ConsoleLogger.shared.log("✅ Indexing finished, \(max(output.components(separatedBy: "\n").count - 1, 0)) row(s) received.")
                 // Write CSV output to a temporary file
                 do {
                     let augmented = self.augmentIndexingCSV(output)
                     let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent("davinci_import.csv")
                     try augmented.write(to: tmpURL, atomically: true, encoding: .utf8)
-                    
+
                     // Launch CSV Import Window
                     CSVImportView.showStandalone(url: tmpURL) { importedClips in
                         self.startMergeReview(importedClips: importedClips, markers: [])
                     }
                 } catch {
+                    ConsoleLogger.shared.log("❌ Failed to process indexing data: \(error)")
                     self.indexingErrorMessage = "Failed to process indexing data: \(error.localizedDescription)"
                     self.showIndexingError = true
                 }
@@ -1439,13 +1476,29 @@ struct ProjectExportView: View {
     }
     
     // MARK: - Extracted Tool Logic (Batch Ops, Thumbnails, Exports)
+    private func batchOpLoadingMessage(type: String, action: String) -> String {
+        let subject: String
+        switch type {
+        case "scene": subject = "Scene Markers"
+        case "vfx": subject = "VFX Markers"
+        case "groups": subject = "Color Groups"
+        default: subject = "Shots"
+        }
+        return (action == "delete" ? "Deleting " : "Creating ") + subject + "..."
+    }
+
     private func performPreflightAndRunBatchOp(type: String, action: String, project: Project) {
         isRunningBatchOp = true
+        resetProgressState()
+        loadingMessage = batchOpLoadingMessage(type: type, action: action)
+        ConsoleLogger.shared.log("▶️ Batch op starting: type=\(type) action=\(action)")
         DaVinciChecker.performPreflightCheck { diag in
             if let diag = diag, diag.success {
                 performBatchOp(type: type, action: action, project: project)
             } else {
                 isRunningBatchOp = false
+                loadingMessage = ""
+                ConsoleLogger.shared.log("❌ Batch op preflight failed: type=\(type) action=\(action)")
                 showIndexingError = true
                 indexingErrorMessage = diag != nil ? DaVinciChecker.formatError(diagnostic: diag!) : "DaVinci Check Failed"
             }
@@ -1459,7 +1512,12 @@ struct ProjectExportView: View {
 
         if type == "scene" {
             let scenes = projectManager.currentScenes
-            if scenes.isEmpty { isRunningBatchOp = false; return }
+            if scenes.isEmpty {
+                ConsoleLogger.shared.log("⚠️ Batch op (type=scene action=\(action)) aborted: no scenes registered.")
+                isRunningBatchOp = false
+                loadingMessage = ""
+                return
+            }
             markers = scenes.map { scene in
                 // Which episode's timeline this scene marker belongs to, so the script can open
                 // it before adding/removing the marker there (no episodes registered → nil, and
@@ -1511,15 +1569,18 @@ struct ProjectExportView: View {
             try data.write(to: tmpURL)
 
             let scriptName = type == "groups" ? "Resolve/VFX/clip-grouping" : "Resolve/Tools/batch_marker_op"
-            PyScriptRunner.run(scriptName: scriptName, args: [tmpURL.path], showOutput: false, enableDownload: false, completion: { output in
+            ConsoleLogger.shared.log("▶️ Running \(scriptName) for \(markers.count) shot(s)/marker(s) (action=\(actionToRun))")
+            PyScriptRunner.run(scriptName: scriptName, args: [tmpURL.path], showOutput: false, enableDownload: false, onProgress: handleProgressLine, completion: { output in
                 DispatchQueue.main.async {
                     self.isRunningBatchOp = false
+                    self.loadingMessage = ""
                     self.handleBatchOpResult(output, type: type, action: action, project: project)
                 }
             })
         } catch {
             isRunningBatchOp = false
-            ConsoleLogger.shared.log("Batch Op Error: \(error)")
+            loadingMessage = ""
+            ConsoleLogger.shared.log("❌ Batch Op Error while preparing payload: \(error)")
         }
     }
 
@@ -1529,31 +1590,29 @@ struct ProjectExportView: View {
     private func handleBatchOpResult(_ output: String?, type: String, action: String, project: Project) {
         struct BatchOpResponse: Decodable { let status: String?; let error: String? }
 
-        // The scripts print one JSON object per line (progress/debug lines, then a final
-        // status line) rather than a single JSON document, so pull out the last JSON-looking
-        // line rather than naively slicing between the first "{" and the last "}".
-        let lastJSONLine = output?
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .last(where: { $0.hasPrefix("{") && $0.hasSuffix("}") })
+        let lastJSONLine = output.flatMap { PyScriptRunner.lastJSONLine(in: $0) }
 
         guard let line = lastJSONLine, let data = line.data(using: .utf8),
               let response = try? JSONDecoder().decode(BatchOpResponse.self, from: data) else {
+            ConsoleLogger.shared.log("❌ Batch op (type=\(type) action=\(action)) produced no parseable response. Raw output:\n\(output ?? "<nil>")")
             showIndexingError = true
             indexingErrorMessage = "No response from DaVinci Resolve."
             return
         }
         if let err = response.error {
+            ConsoleLogger.shared.log("❌ Batch op (type=\(type) action=\(action)) failed: \(err)")
             showIndexingError = true
             indexingErrorMessage = err
             return
         }
         guard response.status == "success" else {
+            ConsoleLogger.shared.log("❌ Batch op (type=\(type) action=\(action)) returned unexpected status: \(line)")
             showIndexingError = true
             indexingErrorMessage = "Unexpected response from DaVinci Resolve."
             return
         }
 
+        ConsoleLogger.shared.log("✅ Batch op (type=\(type) action=\(action)) succeeded: \(line)")
         let active = (action != "delete")
         switch type {
         case "scene": projectManager.updateSceneMarkersActive(projectId: project.id, active: active)
@@ -1565,13 +1624,20 @@ struct ProjectExportView: View {
     
     private func generateThumbnails(project: Project) {
         isProcessing = true
+        resetProgressState()
         // "All episodes / all shots" processes the whole master list (across every registered
         // episode's timeline); otherwise only the shots hand-picked in ThumbnailShotPickerSheet.
         let clips = thumbnailsAllShots
             ? projectManager.currentMasterList
             : projectManager.currentMasterList.filter { selectedThumbnailClipIds.contains($0.id) }
+        loadingMessage = "Generating \(clips.count) Thumbnail\(clips.count == 1 ? "" : "s")..."
+        indexingTotal = clips.count
 
-        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            isProcessing = false
+            loadingMessage = ""
+            return
+        }
         let thumbnailsDir = appSupport.appendingPathComponent("com.skyks030.Resolver").appendingPathComponent("Thumbnails").appendingPathComponent(project.id.uuidString)
 
         try? FileManager.default.createDirectory(at: thumbnailsDir, withIntermediateDirectories: true)
@@ -1594,15 +1660,39 @@ struct ProjectExportView: View {
             let data = try JSONSerialization.data(withJSONObject: payload)
             let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent("resolver_thumbnails.json")
             try data.write(to: tmpURL)
-            
-            PyScriptRunner.run(scriptName: "Resolve/VFX/generate-thumbnails", args: [tmpURL.path], showOutput: false, onProgress: { _ in }) { _ in
+
+            ConsoleLogger.shared.log("▶️ Generating thumbnails for \(clips.count) shot(s) into \(thumbnailsDir.path)")
+            PyScriptRunner.run(scriptName: "Resolve/VFX/generate-thumbnails", args: [tmpURL.path], showOutput: false, onProgress: handleProgressLine) { output in
                 DispatchQueue.main.async {
                     self.isProcessing = false
+                    self.loadingMessage = ""
+
+                    struct ThumbnailsResponse: Decodable { let status: String?; let error: String? }
+                    let lastJSONLine = output.flatMap { PyScriptRunner.lastJSONLine(in: $0) }
+
+                    guard let line = lastJSONLine, let lineData = line.data(using: .utf8),
+                          let response = try? JSONDecoder().decode(ThumbnailsResponse.self, from: lineData),
+                          response.error == nil, response.status == "success" else {
+                        let errMsg = lastJSONLine.flatMap { l -> String? in
+                            guard let d = l.data(using: .utf8) else { return nil }
+                            return (try? JSONDecoder().decode(ThumbnailsResponse.self, from: d))?.error
+                        }
+                        ConsoleLogger.shared.log("❌ Thumbnail generation failed: \(errMsg ?? output ?? "no response")")
+                        self.showIndexingError = true
+                        self.indexingErrorMessage = errMsg ?? "Thumbnail generation failed. Check Debug Mode for details."
+                        return
+                    }
+
+                    ConsoleLogger.shared.log("✅ Thumbnail generation finished: \(line)")
                     self.thumbnailRefreshID = UUID()
                     self.hasThumbnailsCache = true
                 }
             }
-        } catch { isProcessing = false }
+        } catch {
+            isProcessing = false
+            loadingMessage = ""
+            ConsoleLogger.shared.log("❌ Thumbnail generation error while preparing payload: \(error)")
+        }
     }
 
     private func deleteThumbnails(project: Project) {

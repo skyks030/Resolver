@@ -5,12 +5,19 @@ import os
 import importlib.util
 import json
 
+def log(message):
+    """Debug breadcrumb, shown in Resolver's Debug Mode console. Every meaningful step prints
+    one of these so a hang or crash can be pinpointed to the exact step it happened at."""
+    print(json.dumps({"status": "debug", "message": message}))
+    sys.stdout.flush()
+
 def check_davinci():
     try:
         # 1. API Installation Check
         sdk_path = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules"
         sdk_file = os.path.join(sdk_path, "DaVinciResolveScript.py")
-        
+
+        log("Checking for DaVinci Resolve Scripting API...")
         if not os.path.exists(sdk_file):
             return {
                 "success": False,
@@ -21,8 +28,9 @@ def check_davinci():
                     "Haben Sie die aktuellste Version installiert?"
                 ]
             }
-            
+
         # Try loading API
+        log("Loading DaVinci Resolve Scripting API...")
         try:
             spec = importlib.util.spec_from_file_location("DaVinciResolveScript", sdk_file)
             dvr = importlib.util.module_from_spec(spec)
@@ -40,6 +48,7 @@ def check_davinci():
             }
 
         # 2. Connection Check
+        log("Connecting to Resolve...")
         resolve = dvr.scriptapp("Resolve")
         if not resolve:
             return {
@@ -52,11 +61,12 @@ def check_davinci():
                     "Haben Sie DaVinci Resolve nach dem Ändern dieser Einstellung neugestartet?"
                 ]
             }
-            
+
         # 3. Project Check
+        log("Getting project manager and current project...")
         pm = resolve.GetProjectManager()
         project = pm.GetCurrentProject()
-        
+
         if not project:
             return {
                 "success": False,
@@ -66,27 +76,23 @@ def check_davinci():
                     "Bitte öffnen Sie ein Projekt, bevor Sie Daten nach Resolver importieren oder aktualisieren."
                 ]
             }
-            
-        # 4. Timeline Check
-        timeline = project.GetCurrentTimeline()
-        
-        if not timeline:
-            return {
-                "success": False,
-                "error_code": "NO_TIMELINE",
-                "message": "Es ist momentan keine Timeline in DaVinci Resolve geöffnet.",
-                "tips": [
-                    "Bitte öffnen Sie die Timeline, mit der Sie in Resolver arbeiten möchten."
-                ]
-            }
-            
+
+        # NOTE: There used to be a hard "Timeline Check" here (step 4) that failed the whole
+        # preflight if no timeline was currently open in Resolve's Edit page. That blocked every
+        # episode-aware feature (Index All Episodes, the Groups/Markers toggle buttons, Thumbnails)
+        # before they ever got a chance to run — those features are specifically meant to open the
+        # right timeline(s) themselves, and shouldn't require the user to have one pre-opened.
+        # Whether a specific operation actually needs an active timeline is now checked by that
+        # operation's own script (e.g. clip-indexing.py's single-timeline path), which can give a
+        # precise, contextual error instead of this generic one blocking unrelated flows.
+        log(f"Connected. Project: '{project.GetName() if hasattr(project, 'GetName') else '?'}'")
         return {
             "success": True,
             "error_code": "OK",
             "message": "DaVinci Resolve ist erfolgreich verbunden und einsatzbereit.",
             "tips": []
         }
-        
+
     except Exception as e:
         return {
             "success": False,
@@ -100,4 +106,8 @@ def check_davinci():
 
 if __name__ == "__main__":
     result = check_davinci()
-    print(json.dumps(result, indent=2))
+    # Single-line JSON, not indent=2: the debug breadcrumbs above are also one JSON object per
+    # line, and Resolver's Swift side (DaVinciChecker) now pulls out the LAST JSON-looking line
+    # rather than decoding the whole multi-line output as one document — a pretty-printed,
+    # multi-line result here would never match that.
+    print(json.dumps(result))

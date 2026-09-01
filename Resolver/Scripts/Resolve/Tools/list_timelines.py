@@ -39,6 +39,13 @@ def safe_int(value):
         return 0
 
 
+def log(message):
+    """Debug breadcrumb, shown in Resolver's Debug Mode console. Every meaningful step prints
+    one of these so a hang or crash can be pinpointed to the exact step it happened at."""
+    print(json.dumps({"status": "debug", "message": message}))
+    sys.stdout.flush()
+
+
 def collect_media_pool_timeline_names(media_pool):
     """Recursively walk every bin/subfolder in the Media Pool (starting at the
     root folder) and collect the names of every clip whose 'Type' clip
@@ -99,6 +106,7 @@ def main():
         print(json.dumps({"error": "DaVinci Resolve SDK not found. Is DaVinci Resolve Studio installed?"}))
         return
 
+    log("Loading DaVinci Resolve Scripting API...")
     try:
         spec = importlib.util.spec_from_file_location("DaVinciResolveScript", sdk_file)
         dvr_mod = importlib.util.module_from_spec(spec)
@@ -108,27 +116,32 @@ def main():
         print(json.dumps({"error": f"Could not load DaVinci Resolve API: {e}"}))
         return
 
+    log("Connecting to Resolve...")
     resolve = dvr.scriptapp("Resolve")
     if not resolve:
         print(json.dumps({"error": "Cannot connect to DaVinci Resolve. Make sure it is running and External Scripting is enabled."}))
         return
 
+    log("Getting project manager...")
     pm = resolve.GetProjectManager()
     if not pm:
         print(json.dumps({"error": "Could not get Project Manager from DaVinci Resolve."}))
         return
 
+    log("Getting current project...")
     project = pm.GetCurrentProject()
     if not project:
         print(json.dumps({"error": "No project is currently open in DaVinci Resolve."}))
         return
 
     # === 1) Build a metadata lookup from every registered Timeline object ===
+    log("Building Timeline registry metadata...")
     timeline_meta_by_name = {}
     try:
         count = safe_int(project.GetTimelineCount() or 0)
     except Exception:
         count = 0
+    log(f"Timeline registry reports {count} timeline(s).")
 
     for i in range(1, count + 1):
         try:
@@ -179,7 +192,10 @@ def main():
             "fps": fps
         }
 
+    log(f"Registry metadata built for {len(timeline_meta_by_name)} timeline(s): {list(timeline_meta_by_name.keys())}")
+
     # === 2) Recursively search the entire Media Pool for Timeline clips ===
+    log("Scanning Media Pool for Timeline clips (recursive bin walk)...")
     media_pool_names = []
     try:
         media_pool = project.GetMediaPool()
@@ -187,6 +203,7 @@ def main():
             media_pool_names = collect_media_pool_timeline_names(media_pool)
     except Exception:
         media_pool_names = []
+    log(f"Media Pool walk found {len(media_pool_names)} Timeline clip(s): {media_pool_names}")
 
     # Union of the Timeline registry (every timeline Resolve knows about,
     # index 1..count) and whatever the Media Pool walk found, de-duplicated
@@ -221,6 +238,7 @@ def main():
     # Sort alphabetically (case-insensitive) by name
     timelines.sort(key=lambda t: (t.get("name") or "").lower())
 
+    log(f"Union of registry + Media Pool: {len(timelines)} timeline(s) total.")
     print(json.dumps({"timelines": timelines}))
 
 

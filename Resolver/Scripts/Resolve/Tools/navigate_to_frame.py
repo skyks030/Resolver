@@ -3,6 +3,13 @@ import sys
 import json
 import traceback
 
+def log(message):
+    """Debug breadcrumb, shown in Resolver's Debug Mode console. Every meaningful step prints
+    one of these so a hang or crash can be pinpointed to the exact step it happened at. This
+    script's output is otherwise ignored by the Swift side, so extra lines here are risk-free."""
+    print(json.dumps({"status": "debug", "message": message}))
+    sys.stdout.flush()
+
 # Wrap everything to ensure we capture crashes
 try:
     import importlib.util
@@ -15,6 +22,7 @@ try:
         sys.exit(1)
 
     input_file = sys.argv[1]
+    log(f"Loading payload from {input_file}")
 
     try:
         with open(input_file, 'r') as f:
@@ -27,6 +35,7 @@ try:
     target_tc = data.get("tc")
     target_timeline_unique_id = data.get("timelineUniqueId")
     target_timeline_name = data.get("timelineName")
+    log(f"target_tc={target_tc}, target_frame={target_frame}, timelineUniqueId={target_timeline_unique_id}, timelineName={target_timeline_name}")
 
     # === Helpers ===
     def frames_to_tc(frames, fps):
@@ -60,10 +69,12 @@ try:
             else:
                  raise Exception("Could not find Resolve API modules")
 
+        log("Connecting to Resolve...")
         resolve = scriptapp("Resolve")
         if not resolve:
              raise Exception("Could not connect to DaVinci Resolve")
 
+        log("Getting current project...")
         projectManager = resolve.GetProjectManager()
         project = projectManager.GetCurrentProject()
         if not project:
@@ -75,6 +86,7 @@ try:
         # timeline. Falls back to whatever is currently open if no match is
         # found (e.g. no episodes registered, or the timeline was renamed).
         if target_timeline_unique_id or target_timeline_name:
+            log(f"Resolving target timeline (uid={target_timeline_unique_id}, name={target_timeline_name})...")
             try:
                 count = int(project.GetTimelineCount() or 0)
             except Exception:
@@ -104,13 +116,17 @@ try:
                 current = project.GetCurrentTimeline()
                 already_current = current is not None and current.GetName() == match_by_name.GetName()
                 if not already_current:
+                    log(f"Switching to timeline '{match_by_name.GetName()}'...")
                     project.SetCurrentTimeline(match_by_name)
+                else:
+                    log(f"Timeline '{match_by_name.GetName()}' is already current, no switch needed.")
             else:
-                print(json.dumps({"status": "debug", "message": f"Target timeline '{target_timeline_name}' not found, navigating in the currently open timeline instead."}))
+                log(f"Target timeline '{target_timeline_name}' not found, navigating in the currently open timeline instead.")
 
         timeline = project.GetCurrentTimeline()
         if not timeline:
              raise Exception("No active timeline")
+        log(f"Navigating within timeline '{timeline.GetName()}'...")
 
     except Exception as e:
         raise Exception(f"Resolve API Error: {str(e)}")

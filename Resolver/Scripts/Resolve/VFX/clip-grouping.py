@@ -5,11 +5,18 @@ import os
 import importlib.util
 import json
 
+def log(message):
+    """Debug breadcrumb, shown in Resolver's Debug Mode console. Every meaningful step prints
+    one of these so a hang or crash can be pinpointed to the exact step it happened at."""
+    print(json.dumps({"status": "debug", "message": message}))
+    sys.stdout.flush()
+
 if len(sys.argv) < 2:
     print(json.dumps({"error": "Missing JSON input file path"}))
     sys.exit(1)
 
 json_path = sys.argv[1]
+log(f"Loading payload from {json_path}")
 
 if not os.path.exists(json_path):
     print(json.dumps({"error": f"JSON file not found: {json_path}"}))
@@ -24,6 +31,7 @@ except Exception as e:
 
 action = data.get("action", "create")
 markers = data.get("markers", [])
+log(f"action={action}, shots={len(markers)}")
 
 if not markers:
     # Use the same top-level "error" key as every other failure path in this file (and in
@@ -75,6 +83,7 @@ def find_timeline(project, unique_id, name):
 
 try:
     # === Resolve API Setup ===
+    log("Loading DaVinci Resolve Scripting API...")
     sdk_path = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules"
     sdk_file = os.path.join(sdk_path, "DaVinciResolveScript.py")
 
@@ -83,11 +92,13 @@ try:
     spec.loader.exec_module(dvr)
 
     import DaVinciResolveScript as dvr
+    log("Connecting to Resolve...")
     resolve = dvr.scriptapp("Resolve")
 
     if not resolve:
         raise Exception("Could not connect to DaVinci Resolve")
 
+    log("Getting current project...")
     project = resolve.GetProjectManager().GetCurrentProject()
     if not project:
          raise Exception("No active project")
@@ -99,11 +110,21 @@ try:
         # didn't generalize across episodes).
         target_names = {m.get("name") for m in markers if m.get("name")}
         color_groups = project.GetColorGroupsList() or []
+        log(f"Found {len(color_groups)} existing color group(s); {len(target_names)} VFX name(s) targeted for deletion.")
+
+        matching_groups = [g for g in color_groups if g.GetName() in target_names]
+        total_to_delete = len(matching_groups)
+        print(f"PROGRESS: 0/{max(total_to_delete, 1)}")
+        sys.stdout.flush()
+
         deleted_count = 0
-        for g in color_groups:
-            if g.GetName() in target_names:
-                if project.DeleteColorGroup(g):
-                    deleted_count += 1
+        for i, g in enumerate(matching_groups):
+            if project.DeleteColorGroup(g):
+                deleted_count += 1
+            print(f"PROGRESS: {i + 1}/{total_to_delete}")
+            sys.stdout.flush()
+
+        log(f"Done. Deleted {deleted_count}/{total_to_delete} color group(s).")
         print(json.dumps({"status": "success", "processed": deleted_count, "total_clips_grouped": 0}))
         sys.exit(0)
 
@@ -112,6 +133,7 @@ try:
     # only a problem for a marker whose own timeline hint can't be resolved either, so don't gate
     # on it up front.
     original_timeline = project.GetCurrentTimeline()
+    log(f"Original timeline: {original_timeline.GetName() if original_timeline else 'None currently open'}")
 
     # Group markers by resolved target timeline. A marker with no timeline hint (no episodes
     # registered, or the hint can't be resolved) falls back to whatever is currently open —
@@ -143,6 +165,8 @@ try:
     if not groups_by_timeline:
         raise Exception("No active timeline, and none of the provided shots resolved to a registered episode timeline.")
 
+    log(f"Grouped {len(markers)} shot(s) into {len(groups_by_timeline)} timeline group(s): {[tl.GetName() for tl, _ in groups_by_timeline]}")
+
     print(f"PROGRESS: 0/{len(markers)}")
     sys.stdout.flush()
 
@@ -153,8 +177,10 @@ try:
         try:
             project.SetCurrentTimeline(timeline)
         except Exception as e:
-            print(json.dumps({"status": "debug", "message": f"Failed to switch to timeline '{timeline.GetName()}', skipping {len(group_markers)} shots: {e}"}))
+            log(f"Failed to switch to timeline '{timeline.GetName()}', skipping {len(group_markers)} shots: {e}")
             processed_count += len(group_markers)
+            print(f"PROGRESS: {processed_count}/{len(markers)}")
+            sys.stdout.flush()
             continue
 
         start_frame = int(timeline.GetStartFrame())
@@ -171,8 +197,7 @@ try:
             if track_items:
                 all_timeline_clips.extend(track_items)
 
-        print(json.dumps({"status": "progress", "message": f"Cached {len(all_timeline_clips)} clips from {track_count} tracks on '{timeline.GetName()}'."}))
-        sys.stdout.flush()
+        log(f"Timeline '{timeline.GetName()}': cached {len(all_timeline_clips)} clip(s) from {track_count} track(s), processing {len(group_markers)} shot(s).")
 
         for m in group_markers:
             processed_count += 1
@@ -232,6 +257,7 @@ try:
         except Exception:
             pass
 
+    log(f"Done. processed={processed_count}, total_clips_grouped={assigned_total}")
     print(json.dumps({
         "status": "success",
         "processed": processed_count,

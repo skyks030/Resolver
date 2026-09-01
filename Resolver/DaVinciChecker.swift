@@ -20,7 +20,10 @@ class DaVinciChecker {
     static func performPreflightCheck(completion: @escaping (DaVinciDiagnostic?) -> Void) {
         // Run the check_resolve.py script
         PyScriptRunner.run(scriptName: "Resolve/Tools/check_resolve", showOutput: false, enableDownload: false, onProgress: nil) { output in
-            guard let jsonString = output, let data = jsonString.data(using: .utf8) else {
+            // check_resolve.py now prints debug breadcrumbs (visible in Debug Mode) before its
+            // actual result, so pull out the last JSON-looking line rather than decoding the
+            // whole multi-line output as one document.
+            guard let jsonString = output.flatMap({ PyScriptRunner.lastJSONLine(in: $0) }), let data = jsonString.data(using: .utf8) else {
                 let fallback = DaVinciDiagnostic(
                     success: false,
                     errorCode: "PYTHON_RUNNER_ERROR",
