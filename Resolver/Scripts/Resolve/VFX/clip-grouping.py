@@ -22,10 +22,56 @@ except Exception as e:
     print(json.dumps({"error": f"Failed to parse JSON: {e}"}))
     sys.exit(1)
 
+action = data.get("action", "create")
 markers = data.get("markers", [])
+
 if not markers:
-    print(json.dumps({"status": "error", "message": "No clips provided in JSON payload."}))
+    # Use the same top-level "error" key as every other failure path in this file (and in
+    # batch_marker_op.py) — ProjectExportView.handleBatchOpResult only surfaces `error`, not a
+    # "status":"error" shape, so this message would otherwise be silently dropped in favor of a
+    # generic fallback.
+    print(json.dumps({"error": "No clips provided in JSON payload."}))
     sys.exit(0)
+
+def tc_to_frames(target_tc_str, fps_val):
+    parts = target_tc_str.replace(';', ':').split(':')
+    if len(parts) >= 4:
+        sh, sm, ss, sf = map(int, parts[:4])
+        return int((sh * 3600 + sm * 60 + ss) * fps_val + sf)
+    return 0
+
+def find_timeline(project, unique_id, name):
+    """Look up a registered Timeline object by unique id (preferred, stable across
+    renames) or, failing that, by name. Returns None if neither matches anything."""
+    try:
+        count = int(project.GetTimelineCount() or 0)
+    except Exception:
+        count = 0
+
+    by_name = None
+    for i in range(1, count + 1):
+        try:
+            tl = project.GetTimelineByIndex(i)
+        except Exception:
+            tl = None
+        if not tl:
+            continue
+
+        if unique_id and hasattr(tl, "GetUniqueId"):
+            try:
+                if tl.GetUniqueId() == unique_id:
+                    return tl
+            except Exception:
+                pass
+
+        if by_name is None and name:
+            try:
+                if tl.GetName() == name:
+                    by_name = tl
+            except Exception:
+                pass
+
+    return by_name
 
 try:
     # === Resolve API Setup ===
@@ -38,102 +84,156 @@ try:
 
     import DaVinciResolveScript as dvr
     resolve = dvr.scriptapp("Resolve")
-    
+
     if not resolve:
         raise Exception("Could not connect to DaVinci Resolve")
 
     project = resolve.GetProjectManager().GetCurrentProject()
     if not project:
          raise Exception("No active project")
-         
-    timeline = project.GetCurrentTimeline()
-    if not timeline:
-        raise Exception("No active timeline")
 
-    start_frame = int(timeline.GetStartFrame())
-    start_tc = timeline.GetStartTimecode() if hasattr(timeline, 'GetStartTimecode') else "01:00:00:00"
-    fps_raw = timeline.GetSetting("timelineFrameRate")
-    fps = float(fps_raw) if fps_raw else 25.0
-    
-    def tc_to_frames(target_tc_str, fps_val):
-        parts = target_tc_str.replace(';', ':').split(':')
-        if len(parts) >= 4:
-            sh, sm, ss, sf = map(int, parts[:4])
-            return int((sh * 3600 + sm * 60 + ss) * fps_val + sf)
-        return 0
+    if action == "delete":
+        # Color Groups are project-level, not timeline-scoped, so deleting them needs no
+        # timeline switching at all: just remove every group whose name exactly matches one
+        # of the given VFX names (replaces the old Cream-marker-prefix heuristic, which
+        # didn't generalize across episodes).
+        target_names = {m.get("name") for m in markers if m.get("name")}
+        color_groups = project.GetColorGroupsList() or []
+        deleted_count = 0
+        for g in color_groups:
+            if g.GetName() in target_names:
+                if project.DeleteColorGroup(g):
+                    deleted_count += 1
+        print(json.dumps({"status": "success", "processed": deleted_count, "total_clips_grouped": 0}))
+        sys.exit(0)
 
-    start_tc_frames = tc_to_frames(start_tc, fps)
-    
-    # Cache all timeline clips to avoid repeated API calls
-    all_timeline_clips = []
-    track_count = timeline.GetTrackCount("video")
+    # === "create": assign clips on each shot's own episode timeline to a color group ===
+    # May be None (e.g. right after a project switch, nothing open yet in the Edit page) — that's
+    # only a problem for a marker whose own timeline hint can't be resolved either, so don't gate
+    # on it up front.
+    original_timeline = project.GetCurrentTimeline()
+
+    # Group markers by resolved target timeline. A marker with no timeline hint (no episodes
+    # registered, or the hint can't be resolved) falls back to whatever is currently open —
+    # this preserves the original single-timeline behavior.
+    groups_by_timeline = []  # [(timeline, [markers])]
+    index_by_timeline_id = {}
+
+    def group_for(tl):
+        key = id(tl)
+        if key not in index_by_timeline_id:
+            index_by_timeline_id[key] = len(groups_by_timeline)
+            groups_by_timeline.append((tl, []))
+        return groups_by_timeline[index_by_timeline_id[key]][1]
+
+    for m in markers:
+        tl = None
+        uid = m.get("timelineUniqueId")
+        name = m.get("timelineName")
+        if uid or name:
+            tl = find_timeline(project, uid, name)
+        if tl is None:
+            tl = original_timeline
+        if tl is None:
+            # Neither an explicit hint nor a currently-open timeline — nothing we can do for
+            # this one shot; skip it rather than aborting the whole batch.
+            continue
+        group_for(tl).append(m)
+
+    if not groups_by_timeline:
+        raise Exception("No active timeline, and none of the provided shots resolved to a registered episode timeline.")
+
     print(f"PROGRESS: 0/{len(markers)}")
-    sys.stdout.flush()
-
-    for track_idx in range(1, track_count + 1):
-        track_items = timeline.GetItemListInTrack("video", track_idx)
-        if track_items:
-            for item in track_items:
-                all_timeline_clips.append(item)
-
-    print(json.dumps({"status": "progress", "message": f"Cached {len(all_timeline_clips)} clips from {track_count} tracks."}))
     sys.stdout.flush()
 
     processed_count = 0
     assigned_total = 0
 
-    for m in markers:
-        processed_count += 1
-        print(f"PROGRESS: {processed_count}/{len(markers)}")
-        sys.stdout.flush()
-
-        vfx_name = m.get("name")
-        tc_in = m.get("tc")
-        tc_out = m.get("note")  # We passed tcOut in the note field
-        
-        if not vfx_name or not tc_in or not tc_out:
+    for timeline, group_markers in groups_by_timeline:
+        try:
+            project.SetCurrentTimeline(timeline)
+        except Exception as e:
+            print(json.dumps({"status": "debug", "message": f"Failed to switch to timeline '{timeline.GetName()}', skipping {len(group_markers)} shots: {e}"}))
+            processed_count += len(group_markers)
             continue
-            
-        # Timecode parsing for Intersection Window
-        in_frames = start_frame + (tc_to_frames(tc_in, fps) - start_tc_frames)
-        out_frames = start_frame + (tc_to_frames(tc_out, fps) - start_tc_frames)
-        
-        # Ensure correct order
-        if in_frames > out_frames:
-            in_frames, out_frames = out_frames, in_frames
 
-        # Get or Create Color Group
-        groups = project.GetColorGroupsList()
-        target_group = None
-        if groups:
-             for g in groups:
-                 if g.GetName() == vfx_name:
-                     target_group = g
-                     break
-        
-        if not target_group:
-            target_group = project.AddColorGroup(vfx_name)
-        
-        if not target_group:
-             continue
-             
-        # Add intersecting clips to this color group
-        assigned_count_for_clip = 0
-        for item in all_timeline_clips:
-            i_start = item.GetStart()
-            i_end = item.GetEnd()
-            
-            # Simple overlap check: Item starts before VFX ends, AND Item ends after VFX starts
-            if i_start < out_frames and i_end > in_frames:
-                item.AssignToColorGroup(target_group)
-                assigned_count_for_clip += 1
-                assigned_total += 1
-                
-        print(f"{vfx_name},{assigned_count_for_clip}")
+        start_frame = int(timeline.GetStartFrame())
+        start_tc = timeline.GetStartTimecode() if hasattr(timeline, 'GetStartTimecode') else "01:00:00:00"
+        fps_raw = timeline.GetSetting("timelineFrameRate")
+        fps = float(fps_raw) if fps_raw else 25.0
+        start_tc_frames = tc_to_frames(start_tc, fps)
+
+        # Cache all clips on this timeline once, to avoid repeated API calls per marker.
+        all_timeline_clips = []
+        track_count = timeline.GetTrackCount("video")
+        for track_idx in range(1, track_count + 1):
+            track_items = timeline.GetItemListInTrack("video", track_idx)
+            if track_items:
+                all_timeline_clips.extend(track_items)
+
+        print(json.dumps({"status": "progress", "message": f"Cached {len(all_timeline_clips)} clips from {track_count} tracks on '{timeline.GetName()}'."}))
         sys.stdout.flush()
+
+        for m in group_markers:
+            processed_count += 1
+            print(f"PROGRESS: {processed_count}/{len(markers)}")
+            sys.stdout.flush()
+
+            vfx_name = m.get("name")
+            tc_in = m.get("tc")
+            tc_out = m.get("note")  # We passed tcOut in the note field
+
+            if not vfx_name or not tc_in or not tc_out:
+                continue
+
+            # Timecode parsing for Intersection Window
+            in_frames = start_frame + (tc_to_frames(tc_in, fps) - start_tc_frames)
+            out_frames = start_frame + (tc_to_frames(tc_out, fps) - start_tc_frames)
+
+            # Ensure correct order
+            if in_frames > out_frames:
+                in_frames, out_frames = out_frames, in_frames
+
+            # Get or Create Color Group
+            color_groups = project.GetColorGroupsList()
+            target_group = None
+            if color_groups:
+                for g in color_groups:
+                    if g.GetName() == vfx_name:
+                        target_group = g
+                        break
+
+            if not target_group:
+                target_group = project.AddColorGroup(vfx_name)
+
+            if not target_group:
+                continue
+
+            # Add intersecting clips to this color group
+            assigned_count_for_clip = 0
+            for item in all_timeline_clips:
+                i_start = item.GetStart()
+                i_end = item.GetEnd()
+
+                # Simple overlap check: Item starts before VFX ends, AND Item ends after VFX starts
+                if i_start < out_frames and i_end > in_frames:
+                    item.AssignToColorGroup(target_group)
+                    assigned_count_for_clip += 1
+                    assigned_total += 1
+
+            print(f"{vfx_name},{assigned_count_for_clip}")
+            sys.stdout.flush()
+
+    # Restore whatever timeline was open before this run, so Resolve's UI doesn't end up
+    # parked on the last-processed episode.
+    if original_timeline is not None:
+        try:
+            project.SetCurrentTimeline(original_timeline)
+        except Exception:
+            pass
 
     print(json.dumps({
-        "status": "success", 
+        "status": "success",
         "processed": processed_count,
         "total_clips_grouped": assigned_total
     }))

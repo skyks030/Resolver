@@ -114,10 +114,16 @@ struct MarkerData: Codable, Identifiable {
     let note: String
     let duration: Int
     var tc: String?
-    
+    // Which episode's timeline this marker/clip belongs to, so the Resolve-side script can open
+    // the right timeline before acting on it. Populated client-side (see
+    // ProjectExportView.resolveTargetEpisode) when episodes are registered; nil otherwise, in
+    // which case the script falls back to whatever timeline is currently open in Resolve.
+    var timelineUniqueId: String?
+    var timelineName: String?
+
     // Check CodingKeys to exclude ID from JSON requirement
     private enum CodingKeys: String, CodingKey {
-        case frameId, color, name, note, duration, tc
+        case frameId, color, name, note, duration, tc, timelineUniqueId, timelineName
     }
 }
 
@@ -207,6 +213,14 @@ struct Project: Codable, Identifiable {
     var vfxEndMarkerEnabled: Bool? = false // Default OFF
     var vfxRenamingMap: [String: String]? = [:] // Map Original Name -> New Name
     var vfxNameSchema: VfxNameSchema? = nil // Remembered VFX Name Generator settings
+
+    // Toggle-button state for the Color Groups / VFX Markers / Scene Markers buttons in
+    // ProjectExportView. Set only when the corresponding create/delete Resolve call actually
+    // reports success — this is a locally-remembered "last known state", not a live query of
+    // Resolve, so it can drift if someone deletes markers/groups directly in Resolve.
+    var colorGroupsActive: Bool? = false
+    var vfxMarkersActive: Bool? = false
+    var sceneMarkersActive: Bool? = false
 }
 
 struct ProjectStore: Codable {
@@ -562,6 +576,36 @@ class ProjectManager: ObservableObject {
     func updateVfxEndMarkerEnabled(projectId: UUID, enabled: Bool) {
         guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
         projects[index].vfxEndMarkerEnabled = enabled
+
+        if currentProject?.id == projectId {
+            currentProject = projects[index]
+        }
+        save()
+    }
+
+    func updateColorGroupsActive(projectId: UUID, active: Bool) {
+        guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[index].colorGroupsActive = active
+
+        if currentProject?.id == projectId {
+            currentProject = projects[index]
+        }
+        save()
+    }
+
+    func updateVfxMarkersActive(projectId: UUID, active: Bool) {
+        guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[index].vfxMarkersActive = active
+
+        if currentProject?.id == projectId {
+            currentProject = projects[index]
+        }
+        save()
+    }
+
+    func updateSceneMarkersActive(projectId: UUID, active: Bool) {
+        guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[index].sceneMarkersActive = active
 
         if currentProject?.id == projectId {
             currentProject = projects[index]

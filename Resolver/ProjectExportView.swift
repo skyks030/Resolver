@@ -46,6 +46,9 @@ struct ProjectExportView: View {
     @State private var showCSVImport = false
     @State private var showDaVinciImport = false
     @State private var showThumbnailImport = false
+    @State private var showThumbnailShotPicker = false
+    @State private var thumbnailsAllShots = true
+    @State private var selectedThumbnailClipIds: Set<UUID> = []
     @State private var showImportDataSheet = false
     @State private var showExportDataSheet = false
     
@@ -120,6 +123,7 @@ struct ProjectExportView: View {
     @State private var showDeleteThumbnailsAlert = false
     @State private var isProcessing = false
     @State private var isIndexing = false
+    @State private var isRunningBatchOp = false
     @State private var loadingMessage = ""
     @State private var indexingProgress: Double = 0.0
     @State private var indexingTotal: Int = 0
@@ -469,6 +473,12 @@ struct ProjectExportView: View {
         .sheet(isPresented: $showThumbnailImport) {
             ThumbnailImportSheet(
                 vfxThumbnailTrack: $vfxThumbnailTrack,
+                allShots: $thumbnailsAllShots,
+                selectedShotCount: selectedThumbnailClipIds.count,
+                hasExistingThumbnails: hasThumbnailsCache,
+                onPickShots: {
+                    showThumbnailShotPicker = true
+                },
                 onStart: {
                     showThumbnailImport = false
                     DaVinciChecker.performPreflightCheck { diag in
@@ -493,6 +503,17 @@ struct ProjectExportView: View {
                     showThumbnailImport = false
                 }
             )
+            .sheet(isPresented: $showThumbnailShotPicker) {
+                ThumbnailShotPickerSheet(
+                    clips: projectManager.currentMasterList,
+                    selectedIds: $selectedThumbnailClipIds,
+                    onCancel: {
+                        // Backing out of picking specific shots with none chosen goes back to "all".
+                        if selectedThumbnailClipIds.isEmpty { thumbnailsAllShots = true }
+                        showThumbnailShotPicker = false
+                    }
+                )
+            }
         }
         
         // Scene Management Sheet
@@ -653,41 +674,31 @@ struct ProjectExportView: View {
             // RIGHT: Batch Actions (Naming & Deletion handled by Edit Mode)
             VStack(alignment: .trailing, spacing: 10) {
                 HStack(spacing: 8) {
-                    Menu {
-                        Button("Add Scene Markers") { performPreflightAndRunBatchOp(type: "scene", action: "create", project: project) }
-                        Button("Delete Scene Markers", role: .destructive) { performPreflightAndRunBatchOp(type: "scene", action: "delete", project: project) }
-                        Divider()
-                        Button("Add VFX Markers") { performPreflightAndRunBatchOp(type: "vfx", action: "create", project: project) }
-                        Button("Delete VFX Markers", role: .destructive) { performPreflightAndRunBatchOp(type: "vfx", action: "delete", project: project) }
-                    } label: { Label("Markers", systemImage: "mappin.and.ellipse") }
-                    .menuStyle(.button)
-                    .liquidGlassButton(prominent: false)
-                    .controlSize(.small)
-                    .fixedSize()
-                    
-                    Menu {
-                        Button("Create Color Groups") { performPreflightAndRunBatchOp(type: "groups", action: "create", project: project) }
-                        Button("Delete Color Groups", role: .destructive) {
-                            DaVinciChecker.performPreflightCheck { diag in
-                                if let diag = diag, diag.success {
-                                    PyScriptRunner.run(scriptName: "Resolve/VFX/clean-groups", showOutput: false, onProgress: { _ in }) { _ in }
-                                } else {
-                                    showIndexingError = true
-                                    indexingErrorMessage = diag != nil ? DaVinciChecker.formatError(diagnostic: diag!) : "DaVinci Check Failed"
-                                }
-                            }
-                        }
-                    } label: { Label("Groups", systemImage: "paintpalette") }
-                    .menuStyle(.button)
-                    .liquidGlassButton(prominent: false)
-                    .controlSize(.small)
-                    .fixedSize()
+                    batchToggleButton(title: "Scene Markers", icon: "mappin.and.ellipse", isActive: project.sceneMarkersActive == true, type: "scene", project: project)
+                    batchToggleButton(title: "VFX Markers", icon: "mappin.and.ellipse", isActive: project.vfxMarkersActive == true, type: "vfx", project: project)
+                    batchToggleButton(title: "Groups", icon: "paintpalette", isActive: project.colorGroupsActive == true, type: "groups", project: project)
                 }
             }
-            
+
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
+    }
+
+    // A single on/off button: gray when the corresponding *Active flag on Project is off, accent
+    // (prominent) when on. Off → on runs "create"; on → off runs "delete". Disabled while any
+    // batch op is already running so double-clicks can't race two Resolve calls at once.
+    @ViewBuilder
+    private func batchToggleButton(title: String, icon: String, isActive: Bool, type: String, project: Project) -> some View {
+        Button {
+            performPreflightAndRunBatchOp(type: type, action: isActive ? "delete" : "create", project: project)
+        } label: {
+            Label(title, systemImage: icon)
+        }
+        .liquidGlassButton(prominent: isActive)
+        .controlSize(.small)
+        .fixedSize()
+        .disabled(isRunningBatchOp)
     }
 
     @ViewBuilder
@@ -983,20 +994,22 @@ struct ProjectExportView: View {
         getFilteredIndices(clips: projectManager.currentMasterList)
     }
     
+    // Resolves which registered episode a given Record TC (optionally with an explicit "Episode"
+    // tag, e.g. from a clip's dict) belongs to, so callers can open the right timeline before
+    // acting on it — a Resolve position jump, a marker, a color group, a thumbnail grab. An
+    // explicit tag wins; otherwise falls back to Start-TC-range matching (same logic used for CSV
+    // augmentation). Returns nil when no episodes are registered, or none match.
+    private func resolveTargetEpisode(for tc: String, explicitEpisodeTag: String? = nil) -> EpisodeData? {
+        guard !projectManager.currentEpisodes.isEmpty else { return nil }
+        let taggedNumber = explicitEpisodeTag.flatMap { Int($0) } ?? EpisodeData.matchedEpisodeNumber(for: tc, in: projectManager.currentEpisodes)
+        guard let number = taggedNumber else { return nil }
+        return projectManager.currentEpisodes.first { $0.episodeNumber == number }
+    }
+
     private func jumpToResolveTimecode(for clip: ClipData) {
         guard !clip.tcIn.isEmpty else { return }
 
-        // Resolve which episode this clip belongs to, so we can open the right
-        // timeline before jumping — an explicit "Episode" tag (written during
-        // indexing) wins, falling back to Start-TC-range matching (same logic
-        // as CSV augmentation) when that tag is missing.
-        var targetEpisode: EpisodeData? = nil
-        if !projectManager.currentEpisodes.isEmpty {
-            let taggedNumber = Int(clip.dict["Episode"] ?? "") ?? EpisodeData.matchedEpisodeNumber(for: clip.tcIn, in: projectManager.currentEpisodes)
-            if let number = taggedNumber {
-                targetEpisode = projectManager.currentEpisodes.first { $0.episodeNumber == number }
-            }
-        }
+        let targetEpisode = resolveTargetEpisode(for: clip.tcIn, explicitEpisodeTag: clip.dict["Episode"])
 
         var payload: [String: String] = ["tc": clip.tcIn]
         if let episode = targetEpisode {
@@ -1427,75 +1440,155 @@ struct ProjectExportView: View {
     
     // MARK: - Extracted Tool Logic (Batch Ops, Thumbnails, Exports)
     private func performPreflightAndRunBatchOp(type: String, action: String, project: Project) {
+        isRunningBatchOp = true
         DaVinciChecker.performPreflightCheck { diag in
             if let diag = diag, diag.success {
                 performBatchOp(type: type, action: action, project: project)
             } else {
+                isRunningBatchOp = false
                 showIndexingError = true
                 indexingErrorMessage = diag != nil ? DaVinciChecker.formatError(diagnostic: diag!) : "DaVinci Check Failed"
             }
         }
     }
-    
+
     private func performBatchOp(type: String, action: String, project: Project) {
         var actionToRun = action
-        // Omited for brevity/reusability. You will need to rewrite the body slightly to use `project.sceneMarkers` instead of `run.sceneMarkers` and `projectManager.currentMasterList` instead of `run.clips`.
         var markers: [MarkerData] = []
         let clips = projectManager.currentMasterList
-        
+
         if type == "scene" {
             let scenes = projectManager.currentScenes
-            if scenes.isEmpty { return }
+            if scenes.isEmpty { isRunningBatchOp = false; return }
             markers = scenes.map { scene in
-                MarkerData(frameId: 0, color: "Cream", name: scene.name, note: "Resolver-Scene-Marker", duration: 1, tc: scene.startTC)
+                // Which episode's timeline this scene marker belongs to, so the script can open
+                // it before adding/removing the marker there (no episodes registered → nil, and
+                // the script falls back to whatever timeline is currently open, as before).
+                let episode = resolveTargetEpisode(for: scene.startTC)
+                return MarkerData(frameId: 0, color: "Cream", name: scene.name, note: "Resolver-Scene-Marker", duration: 1, tc: scene.startTC, timelineUniqueId: episode?.timelineUniqueId, timelineName: episode?.timelineName)
             }
         } else if type == "vfx" {
             if action == "delete" {
-                // Deletion will now be handled inside the script by scanning all markers for "Resolver VFX-Marker"
+                // Deletion is handled server-side by scanning for "Resolver VFX-Marker" notes;
+                // when episodes are registered the script scans every registered timeline (see
+                // the "episodes" field on the payload below), otherwise just the current one.
                 actionToRun = "delete_all_vfx"
             } else {
                 for clip in clips {
                     let tc = clip.tcIn
                     if tc.isEmpty { continue }
-                    markers.append(MarkerData(frameId: 0, color: "Green", name: clip.vfxName, note: "Resolver VFX-Marker", duration: 1, tc: tc))
+                    let episode = resolveTargetEpisode(for: tc, explicitEpisodeTag: clip.dict["Episode"])
+                    markers.append(MarkerData(frameId: 0, color: "Green", name: clip.vfxName, note: "Resolver VFX-Marker", duration: 1, tc: tc, timelineUniqueId: episode?.timelineUniqueId, timelineName: episode?.timelineName))
                 }
             }
         } else if type == "groups" {
-            // For groups, we pass the vfxName, tcIn, and tcOut using MarkerData structure as a generic transport
-            for clip in clips {
-                if clip.tcIn.isEmpty || clip.tcOut.isEmpty { continue }
-                markers.append(MarkerData(frameId: 0, color: "Group", name: clip.vfxName, note: clip.tcOut, duration: 1, tc: clip.tcIn))
+            if action == "delete" {
+                // Color Groups are project-level (not timeline-scoped), so deletion just needs
+                // the VFX names to match against — no per-timeline info required.
+                markers = clips.map { MarkerData(frameId: 0, color: "Group", name: $0.vfxName, note: "", duration: 1, tc: nil) }
+            } else {
+                // For groups, we pass the vfxName, tcIn, and tcOut using MarkerData structure as a generic transport
+                for clip in clips {
+                    if clip.tcIn.isEmpty || clip.tcOut.isEmpty { continue }
+                    let episode = resolveTargetEpisode(for: clip.tcIn, explicitEpisodeTag: clip.dict["Episode"])
+                    markers.append(MarkerData(frameId: 0, color: "Group", name: clip.vfxName, note: clip.tcOut, duration: 1, tc: clip.tcIn, timelineUniqueId: episode?.timelineUniqueId, timelineName: episode?.timelineName))
+                }
             }
         }
-        
-        struct BatchPayload: Codable { let action: String; let markers: [MarkerData] }
-        let payload = BatchPayload(action: actionToRun, markers: markers)
-        
+
+        struct BatchEpisodeRef: Codable { let timelineUniqueId: String; let timelineName: String }
+        struct BatchPayload: Codable { let action: String; let markers: [MarkerData]; let episodes: [BatchEpisodeRef]? }
+        // Every registered episode's timeline, so "delete_all_vfx" (which has no per-marker list
+        // to carry timeline hints on) knows every timeline it needs to scan.
+        let episodesRef: [BatchEpisodeRef]? = projectManager.currentEpisodes.isEmpty ? nil : projectManager.currentEpisodes.map {
+            BatchEpisodeRef(timelineUniqueId: $0.timelineUniqueId ?? "", timelineName: $0.timelineName)
+        }
+        let payload = BatchPayload(action: actionToRun, markers: markers, episodes: episodesRef)
+
         do {
             let data = try JSONEncoder().encode(payload)
             let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent("resolver_batch_ops.json")
             try data.write(to: tmpURL)
-            
-            if type == "groups" {
-                PyScriptRunner.run(scriptName: "Resolve/VFX/clip-grouping", args: [tmpURL.path], showOutput: false, enableDownload: false, completion: { _ in })
-            } else {
-                PyScriptRunner.run(scriptName: "Resolve/Tools/batch_marker_op", args: [tmpURL.path], showOutput: false, enableDownload: false, completion: { _ in })
-            }
-        } catch { ConsoleLogger.shared.log("Batch Op Error: \(error)") }
+
+            let scriptName = type == "groups" ? "Resolve/VFX/clip-grouping" : "Resolve/Tools/batch_marker_op"
+            PyScriptRunner.run(scriptName: scriptName, args: [tmpURL.path], showOutput: false, enableDownload: false, completion: { output in
+                DispatchQueue.main.async {
+                    self.isRunningBatchOp = false
+                    self.handleBatchOpResult(output, type: type, action: action, project: project)
+                }
+            })
+        } catch {
+            isRunningBatchOp = false
+            ConsoleLogger.shared.log("Batch Op Error: \(error)")
+        }
+    }
+
+    // Only flips the toggle-button's persisted *Active flag once the script actually reports
+    // success — never optimistically. On any failure, surfaces it the same way other Resolve
+    // errors in this view do, and leaves the flag exactly where it was.
+    private func handleBatchOpResult(_ output: String?, type: String, action: String, project: Project) {
+        struct BatchOpResponse: Decodable { let status: String?; let error: String? }
+
+        // The scripts print one JSON object per line (progress/debug lines, then a final
+        // status line) rather than a single JSON document, so pull out the last JSON-looking
+        // line rather than naively slicing between the first "{" and the last "}".
+        let lastJSONLine = output?
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .last(where: { $0.hasPrefix("{") && $0.hasSuffix("}") })
+
+        guard let line = lastJSONLine, let data = line.data(using: .utf8),
+              let response = try? JSONDecoder().decode(BatchOpResponse.self, from: data) else {
+            showIndexingError = true
+            indexingErrorMessage = "No response from DaVinci Resolve."
+            return
+        }
+        if let err = response.error {
+            showIndexingError = true
+            indexingErrorMessage = err
+            return
+        }
+        guard response.status == "success" else {
+            showIndexingError = true
+            indexingErrorMessage = "Unexpected response from DaVinci Resolve."
+            return
+        }
+
+        let active = (action != "delete")
+        switch type {
+        case "scene": projectManager.updateSceneMarkersActive(projectId: project.id, active: active)
+        case "vfx": projectManager.updateVfxMarkersActive(projectId: project.id, active: active)
+        case "groups": projectManager.updateColorGroupsActive(projectId: project.id, active: active)
+        default: break
+        }
     }
     
     private func generateThumbnails(project: Project) {
         isProcessing = true
-        let clips = projectManager.currentMasterList
-        
+        // "All episodes / all shots" processes the whole master list (across every registered
+        // episode's timeline); otherwise only the shots hand-picked in ThumbnailShotPickerSheet.
+        let clips = thumbnailsAllShots
+            ? projectManager.currentMasterList
+            : projectManager.currentMasterList.filter { selectedThumbnailClipIds.contains($0.id) }
+
         guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
         let thumbnailsDir = appSupport.appendingPathComponent("com.skyks030.Resolver").appendingPathComponent("Thumbnails").appendingPathComponent(project.id.uuidString)
-            
+
         try? FileManager.default.createDirectory(at: thumbnailsDir, withIntermediateDirectories: true)
-        
+
         let targetTrack = Int(self.vfxThumbnailTrack) ?? 1
-        let clipsData = clips.map { ["name": $0.vfxName, "tc": $0.tcIn, "frameStart": String($0.frameStart ?? 0), "frameEnd": String($0.frameEnd ?? 0)] }
-        
+        let clipsData = clips.map { clip -> [String: String] in
+            let episode = resolveTargetEpisode(for: clip.tcIn, explicitEpisodeTag: clip.dict["Episode"])
+            return [
+                "name": clip.vfxName,
+                "tc": clip.tcIn,
+                "frameStart": String(clip.frameStart ?? 0),
+                "frameEnd": String(clip.frameEnd ?? 0),
+                "timelineUniqueId": episode?.timelineUniqueId ?? "",
+                "timelineName": episode?.timelineName ?? ""
+            ]
+        }
+
         let payload: [String: Any] = ["outputDir": thumbnailsDir.path, "targetTrack": targetTrack, "clips": clipsData, "format": thumbnailFormat, "resizeHeight": thumbnailHeight]
         do {
             let data = try JSONSerialization.data(withJSONObject: payload)
