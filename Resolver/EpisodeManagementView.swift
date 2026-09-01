@@ -84,13 +84,13 @@ struct EpisodeManagementView: View {
                     List {
                         Section(
                             header: Text("Timelines in \"\(project.name)\""),
-                            footer: Text("Edit a number to reassign it — whichever timeline currently has that number swaps to the old one. Deleting a timeline removes it from this list; press \"Re-Index\" to pull the full timeline list from the project again.")
+                            footer: Text("Episode numbers always match top-to-bottom position — 1, 2, 3, ... — use the arrows to reorder. Removing a timeline shifts everything below it up automatically; press \"Re-Index\" to pull the full timeline list from the project again.")
                         ) {
                             if projectManager.currentEpisodes.isEmpty {
                                 Text("No timelines found in this project.").foregroundColor(.secondary)
                             } else {
-                                ForEach(projectManager.currentEpisodes.sorted(by: { $0.episodeNumber < $1.episodeNumber })) { episode in
-                                    episodeRow(episode)
+                                ForEach(Array(projectManager.currentEpisodes.enumerated()), id: \.element.id) { index, episode in
+                                    episodeRow(episode, index: index)
                                 }
                                 .animation(.default, value: projectManager.currentEpisodes)
                             }
@@ -115,33 +115,48 @@ struct EpisodeManagementView: View {
         }
         .frame(minWidth: 520, minHeight: 450)
         .onAppear {
-            indexTimelines()
+            // Once episodes have been configured, opening the manager should just show that
+            // saved arrangement — not silently pull the live timeline list back in (which would
+            // re-add every timeline the user had deliberately removed here). Only auto-index the
+            // first time (nothing configured yet); after that, indexing only happens via the
+            // explicit "Re-Index" button.
+            if projectManager.currentEpisodes.isEmpty {
+                indexTimelines()
+            } else {
+                isIndexing = false
+            }
         }
     }
 
     // MARK: - Row
 
     @ViewBuilder
-    private func episodeRow(_ episode: EpisodeData) -> some View {
+    private func episodeRow(_ episode: EpisodeData, index: Int) -> some View {
         HStack(spacing: 12) {
-            HStack(spacing: 4) {
-                Text("Episode")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                TextField("", value: Binding(
-                    get: { episode.episodeNumber },
-                    set: { setEpisodeNumber($0, for: episode.id) }
-                ), format: .number)
-                .textFieldStyle(.roundedBorder)
-                .multilineTextAlignment(.center)
-                .frame(width: 44)
+            Text("Episode \(episode.episodeNumber)")
+                .font(.subheadline.bold())
+                .frame(width: 90, alignment: .leading)
 
-                Stepper("", value: Binding(
-                    get: { episode.episodeNumber },
-                    set: { setEpisodeNumber($0, for: episode.id) }
-                ), in: 1...9999)
-                .labelsHidden()
+            VStack(spacing: 0) {
+                Button {
+                    moveEpisode(episode, direction: -1)
+                } label: {
+                    Image(systemName: "chevron.up")
+                }
+                .buttonStyle(.plain)
+                .disabled(index == 0)
+                .help("Move up (becomes Episode \(episode.episodeNumber - 1))")
+
+                Button {
+                    moveEpisode(episode, direction: 1)
+                } label: {
+                    Image(systemName: "chevron.down")
+                }
+                .buttonStyle(.plain)
+                .disabled(index == projectManager.currentEpisodes.count - 1)
+                .help("Move down (becomes Episode \(episode.episodeNumber + 1))")
             }
+            .foregroundColor(.accentColor)
 
             Divider()
 
@@ -164,23 +179,32 @@ struct EpisodeManagementView: View {
 
     // MARK: - Actions
 
-    private func setEpisodeNumber(_ newNumberRaw: Int, for id: UUID) {
-        let newNumber = max(1, newNumberRaw)
-        guard let idx = projectManager.currentEpisodes.firstIndex(where: { $0.id == id }) else { return }
-        let oldNumber = projectManager.currentEpisodes[idx].episodeNumber
-        if oldNumber == newNumber { return }
-
-        // Enforce uniqueness: whoever currently holds the target number
-        // takes over the edited row's old number instead (swap).
-        if let conflictIdx = projectManager.currentEpisodes.firstIndex(where: { $0.episodeNumber == newNumber && $0.id != id }) {
-            projectManager.currentEpisodes[conflictIdx].episodeNumber = oldNumber
+    // Swaps this episode with its neighbor above/below (direction -1/+1) and renumbers
+    // everything, animated so the reordering reads as a smooth reshuffle rather than a jump cut.
+    private func moveEpisode(_ episode: EpisodeData, direction: Int) {
+        guard let idx = projectManager.currentEpisodes.firstIndex(where: { $0.id == episode.id }) else { return }
+        let newIdx = idx + direction
+        guard newIdx >= 0, newIdx < projectManager.currentEpisodes.count else { return }
+        withAnimation(.easeInOut(duration: 0.25)) {
+            projectManager.currentEpisodes.swapAt(idx, newIdx)
+            renumberEpisodes()
         }
-        projectManager.currentEpisodes[idx].episodeNumber = newNumber
         projectManager.saveEpisodes()
     }
 
+    // Episode numbers are never edited directly — they always mirror top-to-bottom position,
+    // so removing or reordering a row automatically renumbers everything else around it.
+    private func renumberEpisodes() {
+        for i in projectManager.currentEpisodes.indices {
+            projectManager.currentEpisodes[i].episodeNumber = i + 1
+        }
+    }
+
     private func deleteEpisode(_ episode: EpisodeData) {
-        projectManager.currentEpisodes.removeAll { $0.id == episode.id }
+        withAnimation(.easeInOut(duration: 0.25)) {
+            projectManager.currentEpisodes.removeAll { $0.id == episode.id }
+            renumberEpisodes()
+        }
         projectManager.saveEpisodes()
     }
 
@@ -224,36 +248,36 @@ struct EpisodeManagementView: View {
         }
     }
 
-    // Re-Index always reflects the full, live state of the project: every
-    // timeline currently in DaVinci Resolve is shown, including ones
-    // previously removed here. Existing episode numbers are preserved for
-    // timelines that are still present; brand-new timelines are appended,
-    // sorted alphabetically, and auto-numbered continuing from the highest
-    // number in use.
+    // Re-Index always reflects the full, live state of the project: every timeline currently in
+    // DaVinci Resolve is shown, including ones previously removed here. The user's top-to-bottom
+    // arrangement (which IS the episode numbering) is preserved for every timeline that's still
+    // present; brand-new timelines are appended at the end, alphabetically, and everything is
+    // renumbered 1, 2, 3, ... by final position.
     private func mergeTimelines(_ timelines: [TimelineInfo]) {
-        let incoming = timelines
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-
-        var existing = projectManager.currentEpisodes
-        var usedNumbers = Set(existing.map { $0.episodeNumber })
         var merged: [EpisodeData] = []
+        var matchedTimelineIds = Set<String>()
 
-        for tl in incoming {
-            if let idx = existing.firstIndex(where: {
-                (tl.uniqueId?.isEmpty == false && $0.timelineUniqueId == tl.uniqueId) || $0.timelineName == tl.name
-            }) {
-                var episode = existing[idx]
-                episode.timelineName = tl.name
-                episode.timelineUniqueId = tl.uniqueId
-                episode.startTC = tl.startTC
-                merged.append(episode)
-                existing.remove(at: idx)
-            } else {
-                let nextNumber = (usedNumbers.max() ?? 0) + 1
-                usedNumbers.insert(nextNumber)
-                merged.append(EpisodeData(timelineName: tl.name, timelineUniqueId: tl.uniqueId, episodeNumber: nextNumber, startTC: tl.startTC))
+        for var episode in projectManager.currentEpisodes {
+            guard let tl = timelines.first(where: {
+                ($0.uniqueId?.isEmpty == false && $0.uniqueId == episode.timelineUniqueId) || $0.name == episode.timelineName
+            }) else {
+                continue // This episode's timeline no longer exists in the project — drop it.
             }
+            episode.timelineName = tl.name
+            episode.timelineUniqueId = tl.uniqueId
+            episode.startTC = tl.startTC
+            merged.append(episode)
+            matchedTimelineIds.insert(tl.id)
         }
+
+        let newTimelines = timelines
+            .filter { !matchedTimelineIds.contains($0.id) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        for tl in newTimelines {
+            merged.append(EpisodeData(timelineName: tl.name, timelineUniqueId: tl.uniqueId, episodeNumber: 0, startTC: tl.startTC))
+        }
+
+        for i in merged.indices { merged[i].episodeNumber = i + 1 }
 
         projectManager.currentEpisodes = merged
         projectManager.saveEpisodes()

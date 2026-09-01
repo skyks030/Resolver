@@ -425,6 +425,12 @@ class ProjectManager: ObservableObject {
                         loaded.append(EpisodeData(id: uuid, timelineName: cols[1], timelineUniqueId: uniqueId, episodeNumber: number, startTC: startTC))
                     }
                 }
+                // Episode numbers always mirror top-to-bottom position now (no more free-form
+                // editing) — sort by whatever number was last saved (preserves intent from
+                // before this was enforced, and any legacy data with gaps from deletions), then
+                // close those gaps by renumbering 1, 2, 3, ... by final position.
+                loaded.sort { $0.episodeNumber < $1.episodeNumber }
+                for i in loaded.indices { loaded[i].episodeNumber = i + 1 }
                 currentEpisodes = loaded
                 print("🔄 Loaded \(currentEpisodes.count) episodes from Episodes.csv")
             } catch {

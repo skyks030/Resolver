@@ -85,6 +85,12 @@ struct ProjectExportView: View {
         for clip in projectManager.currentMasterList {
             keys.formUnion(clip.dict.keys)
         }
+        // "Episode"/"Scene" show up as soon as at least one is registered, even before any clip
+        // has actually been tagged with one — e.g. right after setting up Episodes/Scenes, before
+        // ever indexing, so they're immediately available to fill in by hand (including via Batch
+        // Edit) rather than only appearing after the fact.
+        if !projectManager.currentEpisodes.isEmpty { keys.insert("Episode") }
+        if !projectManager.currentScenes.isEmpty { keys.insert("Scene") }
         return keys.sorted()
     }
     
@@ -764,7 +770,7 @@ struct ProjectExportView: View {
                 .liquidGlassButton(prominent: false)
                 
                 Button("Batch Edit") {
-                    batchEditColumn = batchEditableColumns.first ?? ""
+                    batchEditColumn = activeColumns.first ?? ""
                     batchEditValue = ""
                     showBatchEditSheet = true
                 }
@@ -805,7 +811,7 @@ struct ProjectExportView: View {
             .padding(.vertical, 16)
             .sheet(isPresented: $showBatchEditSheet) {
                 BatchEditSheet(
-                    columns: batchEditableColumns,
+                    columns: activeColumns,
                     selectedCount: selectedForDelete.count,
                     column: $batchEditColumn,
                     value: $batchEditValue,
@@ -1207,18 +1213,6 @@ struct ProjectExportView: View {
             }
         }
         projectManager.saveMasterList()
-    }
-
-    // Columns offered by the Batch Editor: every active column, plus "Episode"
-    // even if no clip has been tagged with it yet — the whole point of batch
-    // editing is often to backfill Episode assignments by hand for the first
-    // time (e.g. clips indexed before Episodes were registered at all).
-    private var batchEditableColumns: [String] {
-        var cols = activeColumns
-        if !projectManager.currentEpisodes.isEmpty && !cols.contains("Episode") {
-            cols.insert("Episode", at: 0)
-        }
-        return cols
     }
 
     private func getFilteredIndices(clips: [ClipData]) -> [Int] {
