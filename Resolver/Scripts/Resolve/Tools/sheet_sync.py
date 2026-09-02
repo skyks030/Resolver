@@ -14,8 +14,11 @@ Input (argv[1], a JSON file):
     "accessToken": "...",
     "link": "https://...",                  # the pasted share/document URL — not needed for "whoami"
     "sheetName": "Sheet1" or null,           # null = first sheet/worksheet
-    "rows": [ {"col": "value", ...}, ... ]   # only for action == "write" — upserted by the
-                                              # "Resolve Unique ID" column, appended if not found
+    "rows": [ {"col": "value", ...}, ... ],  # only for action == "write" — upserted by the
+                                              # "VFX Name" column, appended if not found/blank
+    "columnOrder": ["VFX Name", ...] or null # only for action == "write" — the master list's
+                                              # current display order, used for any brand-new
+                                              # column a fresh/empty sheet doesn't have yet
   }
 
 Output (stdout, single JSON line):
@@ -61,7 +64,11 @@ def http_json(method, url, token, body=None):
 
 # === Shared row <-> 2D-values conversion ===
 
-RESOLVE_ID_COLUMN = "Resolve Unique ID"
+# Which column identifies "the same shot" between an outgoing row and an existing sheet row, so a
+# repeat sync updates that row in place instead of appending a duplicate. Real shot data — a
+# synced sheet, unlike a DaVinci Resolve import, reliably carries an actual VFX Name — rather than
+# a synthetic per-clip ID (Resolver doesn't generate one; see MergeManager's column-aware matcher).
+UPSERT_KEY_COLUMN = "VFX Name"
 
 
 def values_to_rows(values):
@@ -79,24 +86,36 @@ def values_to_rows(values):
     return rows
 
 
-def build_header(existing_values, rows):
+def build_header(existing_values, rows, column_order=None):
     """Union of the sheet's current header (order preserved) and every column appearing in the
     rows about to be pushed, so a brand-new/empty sheet — or one missing a column Resolver now
-    wants to write — gets its header widened instead of silently dropping that data."""
+    wants to write — gets its header widened instead of silently dropping that data. No column is
+    force-injected here beyond what the data actually contains.
+
+    New columns (nothing existing to anchor an order on) follow `column_order` — the master
+    list's current display order, passed by Swift — rather than a row dict's key order, which
+    Swift's JSON encoding doesn't preserve at all (so without this, a brand-new sheet's very
+    first write would land its columns in an effectively random order)."""
     header = [str(h) for h in existing_values[0]] if existing_values else []
     seen = set(header)
+    ordered_new_cols = list(column_order or [])
+    all_cols = set()
     for row in rows:
-        for col in row.keys():
-            if col not in seen:
-                header.append(col)
-                seen.add(col)
-    if RESOLVE_ID_COLUMN not in seen:
-        header.append(RESOLVE_ID_COLUMN)
+        all_cols.update(row.keys())
+    # column_order may be missing/stale columns (e.g. a column added after it was captured) —
+    # append those at the end, still in a stable (sorted) order rather than dict-iteration order.
+    ordered_new_cols += sorted(all_cols - set(ordered_new_cols))
+    for col in ordered_new_cols:
+        if col in all_cols and col not in seen:
+            header.append(col)
+            seen.add(col)
     return header
 
 
 def build_id_index(header, existing_values):
-    id_col_idx = header.index(RESOLVE_ID_COLUMN)
+    if UPSERT_KEY_COLUMN not in header:
+        return {}
+    id_col_idx = header.index(UPSERT_KEY_COLUMN)
     id_row_index = {}
     for i, raw_row in enumerate(existing_values[1:] if existing_values else [], start=1):
         rid = raw_row[id_col_idx] if id_col_idx < len(raw_row) else None
@@ -105,8 +124,8 @@ def build_id_index(header, existing_values):
     return id_row_index
 
 
-def apply_upserts(existing_values, rows):
-    header = build_header(existing_values, rows)
+def apply_upserts(existing_values, rows, column_order=None):
+    header = build_header(existing_values, rows, column_order)
     id_row_index = build_id_index(header, existing_values)
 
     values = [list(r) for r in existing_values] if existing_values else []
@@ -119,7 +138,7 @@ def apply_upserts(existing_values, rows):
         values[0] = header
 
     for row in rows:
-        rid = row.get(RESOLVE_ID_COLUMN)
+        rid = row.get(UPSERT_KEY_COLUMN)
         new_row = [row.get(col, "") for col in header]
         if rid and rid in id_row_index:
             values[id_row_index[rid]] = new_row
@@ -188,7 +207,7 @@ def ms_fetch(link, sheet_name, token):
     return values_to_rows(result.get("values", [])), sheet_name
 
 
-def ms_write(link, sheet_name, rows, token):
+def ms_write(link, sheet_name, rows, token, column_order=None):
     log("Resolving Excel share link via Microsoft Graph...")
     drive_id, item_id = ms_resolve_drive_item(link, token)
     if not sheet_name:
@@ -197,7 +216,7 @@ def ms_write(link, sheet_name, rows, token):
     log(f"Reading current worksheet '{sheet_name}' to merge in new/updated rows...")
     existing = http_json("GET", ms_used_range_url(drive_id, item_id, sheet_name), token)
     existing_values = existing.get("values", [])
-    new_values = apply_upserts(existing_values, rows)
+    new_values = apply_upserts(existing_values, rows, column_order)
 
     log(f"Writing {len(new_values)} row(s) (incl. header) back to '{sheet_name}'...")
     address = f"A1:{col_letter(len(new_values[0]))}{len(new_values)}"
@@ -235,7 +254,7 @@ def google_fetch(link, sheet_name, token):
     return values_to_rows(result.get("values", [])), sheet_name
 
 
-def google_write(link, sheet_name, rows, token):
+def google_write(link, sheet_name, rows, token, column_order=None):
     spreadsheet_id = google_spreadsheet_id(link)
     if not sheet_name:
         sheet_name = google_first_sheet_name(spreadsheet_id, token)
@@ -245,7 +264,7 @@ def google_write(link, sheet_name, rows, token):
     url = f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{range_}"
     existing = http_json("GET", url, token)
     existing_values = existing.get("values", [])
-    new_values = apply_upserts(existing_values, rows)
+    new_values = apply_upserts(existing_values, rows, column_order)
 
     log(f"Writing {len(new_values)} row(s) (incl. header) back to '{sheet_name}'...")
     write_url = f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{range_}?valueInputOption=RAW"
@@ -313,10 +332,11 @@ def main():
             print(json.dumps({"status": "success", "rows": rows, "sheetName": resolved_sheet}))
         else:
             rows = data.get("rows", [])
+            column_order = data.get("columnOrder")
             if provider == "microsoft":
-                count = ms_write(link, sheet_name, rows, token)
+                count = ms_write(link, sheet_name, rows, token, column_order)
             else:
-                count = google_write(link, sheet_name, rows, token)
+                count = google_write(link, sheet_name, rows, token, column_order)
             log(f"Wrote {count} row(s).")
             print(json.dumps({"status": "success", "written": count}))
     except Exception as e:

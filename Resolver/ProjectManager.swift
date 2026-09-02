@@ -16,10 +16,6 @@ struct ClipData: Codable, Identifiable, Equatable {
         get { dict["Original VFX Name"] }
         set { dict["Original VFX Name"] = newValue }
     }
-    var uniqueId: String? {
-        get { dict["Resolve Unique ID"] }
-        set { dict["Resolve Unique ID"] = newValue }
-    }
     /// Soft-delete flag set from the sync review windows when a shot is no longer found on the
     /// other side (e.g. deleted in Resolve) and the user confirms it should be marked removed.
     /// Never actually removes the row from the master list — only flags it (struck-through in
@@ -34,6 +30,13 @@ struct ClipData: Codable, Identifiable, Equatable {
     var sourceTcOut: String { get { dict["Source TC Out"] ?? "" } set { dict["Source TC Out"] = newValue } }
     var fileNames: String { get { dict["File Names"] ?? "" } set { dict["File Names"] = newValue } }
     var reelName: String { get { dict["Reel Name"] ?? "" } set { dict["Reel Name"] = newValue } }
+    /// When this clip's thumbnail file was last (re)generated — a plain text column like any
+    /// other, so it flows through the existing Sheet Sync / Sync Review diff machinery
+    /// unmodified: a stale local thumbnail vs. what a synced sheet last recorded shows up as a
+    /// normal resolvable conflict. No image data itself is synced (see [[merge-manager-gap]] for
+    /// why — neither Microsoft Graph nor the Google Sheets API can embed a cell image without a
+    /// publicly-hosted URL, which this app doesn't have infrastructure for).
+    var thumbnailUpdatedAt: String { get { dict["Thumbnail Updated"] ?? "" } set { dict["Thumbnail Updated"] = newValue.isEmpty ? nil : newValue } }
     
     var frameStart: Int? {
         get { if let val = dict["Frame Start"] { return Int(val) }; return nil }
@@ -53,17 +56,24 @@ struct ClipData: Codable, Identifiable, Equatable {
     }
     
     enum CodingKeys: String, CodingKey {
-        case id, dict, vfxName, tcIn, tcOut, sourceTcIn, sourceTcOut, fileNames, reelName, frameStart, frameEnd, duration, originalVfxName, uniqueId, customMetadata
+        case id, dict, vfxName, tcIn, tcOut, sourceTcIn, sourceTcOut, fileNames, reelName, frameStart, frameEnd, duration, originalVfxName, customMetadata
     }
     
+    /// Dict keys actively scrubbed from every incoming `ClipData`, regardless of source — right
+    /// now just the retired per-clip "Resolve Unique ID" (see [[merge-manager-gap]]). Nothing
+    /// generates it anymore, but an already-saved project, or a spreadsheet synced before this
+    /// was removed, can still hand one back in — stripped here so it can never resurface as a
+    /// column no matter where the data came from.
+    private static let legacyStrippedKeys: Set<String> = ["Resolve Unique ID"]
+
     init() {}
-    
+
     init(id: UUID = UUID(), dict: [String: String]) {
         self.id = id
-        self.dict = dict
+        self.dict = dict.filter { !Self.legacyStrippedKeys.contains($0.key) }
     }
     
-    init(id: UUID, vfxName: String, tcIn: String, tcOut: String, sourceTcIn: String, sourceTcOut: String, fileNames: String, reelName: String, frameStart: Int?, frameEnd: Int?, duration: Int?, originalVfxName: String?, uniqueId: String?, customMetadata: [String:String]? = nil) {
+    init(id: UUID, vfxName: String, tcIn: String, tcOut: String, sourceTcIn: String, sourceTcOut: String, fileNames: String, reelName: String, frameStart: Int?, frameEnd: Int?, duration: Int?, originalVfxName: String?, customMetadata: [String:String]? = nil) {
         self.id = id
         self.vfxName = vfxName
         self.tcIn = tcIn
@@ -76,7 +86,6 @@ struct ClipData: Codable, Identifiable, Equatable {
         self.frameEnd = frameEnd
         self.duration = duration
         if let o = originalVfxName { self.originalVfxName = o }
-        if let u = uniqueId { self.uniqueId = u }
         if let custom = customMetadata {
             for (k, v) in custom { self.dict[k] = v }
         }
@@ -87,7 +96,7 @@ struct ClipData: Codable, Identifiable, Equatable {
         self.id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         
         if let d = try container.decodeIfPresent([String: String].self, forKey: .dict) {
-            self.dict = d
+            self.dict = d.filter { !Self.legacyStrippedKeys.contains($0.key) }
         } else {
             if let v = try? container.decodeIfPresent(String.self, forKey: .vfxName) { self.vfxName = v }
             if let v = try? container.decodeIfPresent(String.self, forKey: .tcIn) { self.tcIn = v }
@@ -100,9 +109,8 @@ struct ClipData: Codable, Identifiable, Equatable {
             if let v = try? container.decodeIfPresent(Int.self, forKey: .frameEnd) { self.frameEnd = v }
             if let v = try? container.decodeIfPresent(Int.self, forKey: .duration) { self.duration = v }
             if let v = try? container.decodeIfPresent(String.self, forKey: .originalVfxName) { self.originalVfxName = v }
-            if let v = try? container.decodeIfPresent(String.self, forKey: .uniqueId) { self.uniqueId = v }
             if let c = try? container.decodeIfPresent([String:String].self, forKey: .customMetadata) {
-                for (k, val) in c { self.dict[k] = val }
+                for (k, val) in c where !Self.legacyStrippedKeys.contains(k) { self.dict[k] = val }
             }
         }
     }
@@ -217,7 +225,9 @@ struct Project: Codable, Identifiable {
     var runs: [IndexingRun]? = [] // Legacy, kept for decoding old JSON
     var sceneMarkers: [MarkerData]? = [] // Moved to project level
     var vfxTrackIndex: String? = nil
-    var vfxThumbnailTrackIndex: String? = nil
+    var vfxThumbnailTrackIndex: String? = nil // Legacy — thumbnails no longer solo a source track, kept for decoding old JSON
+    var vfxThumbnailFramePosition: String? = nil // "start" | "middle" | "end"; nil defaults to "start"
+    var vfxThumbnailScaleHeight: Int? = nil // nil = use the app-wide default from Settings
     var vfxEndMarkerEnabled: Bool? = false // Default OFF
     var vfxRenamingMap: [String: String]? = [:] // Map Original Name -> New Name
     var vfxNameSchema: VfxNameSchema? = nil // Remembered VFX Name Generator settings
@@ -589,9 +599,7 @@ class ProjectManager: ObservableObject {
             if processedClips[i].originalVfxName == nil {
                 processedClips[i].originalVfxName = processedClips[i].vfxName
             }
-            if let uid = processedClips[i].uniqueId, let newName = renamingMap[uid] {
-                 processedClips[i].vfxName = newName
-            } else if let original = processedClips[i].originalVfxName, let newName = renamingMap[original] {
+            if let original = processedClips[i].originalVfxName, let newName = renamingMap[original] {
                  processedClips[i].vfxName = newName
             }
         }
@@ -618,9 +626,7 @@ class ProjectManager: ObservableObject {
                      clip.originalVfxName = clip.vfxName
                 }
                 
-                if let uid = clip.uniqueId, let newName = projects[index].vfxRenamingMap?[uid] {
-                     clip.vfxName = newName
-                } else if let original = clip.originalVfxName, let newName = projects[index].vfxRenamingMap?[original] {
+                if let original = clip.originalVfxName, let newName = projects[index].vfxRenamingMap?[original] {
                      clip.vfxName = newName
                 }
                 currentMasterList[i] = clip
@@ -644,10 +650,20 @@ class ProjectManager: ObservableObject {
         save()
     }
 
-    func updateVfxThumbnailTrack(projectId: UUID, track: String) {
+    func updateVfxThumbnailFramePosition(projectId: UUID, position: String) {
         guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
-        projects[index].vfxThumbnailTrackIndex = track
-        
+        projects[index].vfxThumbnailFramePosition = position
+
+        if currentProject?.id == projectId {
+            currentProject = projects[index]
+        }
+        save()
+    }
+
+    func updateVfxThumbnailScale(projectId: UUID, height: Int) {
+        guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[index].vfxThumbnailScaleHeight = height
+
         if currentProject?.id == projectId {
             currentProject = projects[index]
         }

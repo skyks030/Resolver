@@ -1,11 +1,19 @@
 import SwiftUI
 
+// Sheet Sync's tabs (Microsoft Excel / Google Sheets) are always both visible, independent of
+// what's linked — each tab lists every sheet pinned under that provider as its own "Compare Now /
+// Unlink" widget, with an always-available way to pin another. The list of pinned sheets lives in
+// `SheetSyncStore` (program-wide, UserDefaults-backed) rather than on `Project`, so it survives
+// switching between Resolver projects — only the master list being compared against is
+// project-specific, not which sheets are linked.
 struct SheetSyncView: View {
     @Environment(\.dismiss) var dismiss
     @EnvironmentObject var projectManager: ProjectManager
+    @ObservedObject private var store = SheetSyncStore.shared
     let project: Project
 
     @State private var selectedProvider: SheetSyncProviderKind = .microsoft
+    @State private var showAddSheet = false
     @State private var linkText: String = ""
     @State private var sheetNameText: String = ""
     @State private var isBusy = false
@@ -16,18 +24,24 @@ struct SheetSyncView: View {
     @State private var showReview = false
     @State private var reviewMergeItems: [MergeItem] = []
     @State private var reviewPushCandidates: [PushCandidate] = []
-    @State private var resolvedSheetName: String = ""
+    // Which pinned sheet Compare Now was last pressed for — drives both the review sheet's
+    // labeling and, on Apply, which sheet gets written back to.
+    @State private var activeSheetId: UUID? = nil
     // Bumped whenever this window regains focus (e.g. after the user sets up sign-in in the
     // separate Settings window and switches back here) so `isProviderConfigured` — a live Keychain
     // check, not a cached flag — gets re-evaluated instead of showing a stale "not connected" state.
     @State private var signInRefreshTick = false
 
-    private var linkedProviderKind: SheetSyncProviderKind? {
-        project.sheetSyncProvider.flatMap { SheetSyncProviderKind(rawValue: $0) }
+    private var activeSheet: PinnedSheet? {
+        activeSheetId.flatMap { id in store.pinnedSheets.first { $0.id == id } }
+    }
+
+    private func kind(of sheet: PinnedSheet) -> SheetSyncProviderKind {
+        SheetSyncProviderKind(rawValue: sheet.provider) ?? selectedProvider
     }
 
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 16) {
             HStack {
                 Text("Sheet Sync")
                     .font(.title2)
@@ -35,55 +49,6 @@ struct SheetSyncView: View {
                 Spacer()
             }
 
-            if let linkedKind = linkedProviderKind, let link = project.sheetSyncLink {
-                linkedView(kind: linkedKind, link: link)
-            } else {
-                linkNewView
-            }
-
-            if !statusMessage.isEmpty {
-                HStack {
-                    if isBusy { ProgressView().controlSize(.small) }
-                    Text(statusMessage).font(.caption).foregroundColor(.secondary).textSelection(.enabled)
-                }
-            }
-
-            Spacer()
-            Divider()
-            HStack {
-                Spacer()
-                Button("Close") { dismiss() }
-                    .keyboardShortcut(.escape, modifiers: [])
-            }
-        }
-        .padding()
-        .frame(width: 520, height: 440)
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            signInRefreshTick.toggle()
-        }
-        .alert("Sheet Sync Error", isPresented: $showError) {
-            Button("OK", role: .cancel) { }
-        } message: { Text(errorMessage) }
-        .sheet(isPresented: $showReview) {
-            SyncReviewView(
-                mergeItems: $reviewMergeItems,
-                allMasterClips: projectManager.currentMasterList,
-                sourceLabel: (linkedProviderKind ?? selectedProvider).displayName,
-                supportsPush: true,
-                pushCandidates: $reviewPushCandidates,
-                onApply: {
-                    showReview = false
-                    applySync()
-                },
-                onCancel: { showReview = false }
-            )
-        }
-    }
-
-    // MARK: - Linking
-
-    private var linkNewView: some View {
-        VStack(alignment: .leading, spacing: 12) {
             Picker("Service:", selection: $selectedProvider) {
                 ForEach(SheetSyncProviderKind.allCases) { kind in
                     Text(kind.displayName).tag(kind)
@@ -99,51 +64,111 @@ struct SheetSyncView: View {
                         .foregroundColor(.orange)
                     openSettingsButton
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            TextField(selectedProvider.linkPlaceholder, text: $linkText)
-                .textFieldStyle(.roundedBorder)
-                .disabled(!isProviderConfigured(selectedProvider))
-
-            TextField("Sheet/Worksheet name (optional — defaults to the first)", text: $sheetNameText)
-                .textFieldStyle(.roundedBorder)
-                .disabled(!isProviderConfigured(selectedProvider))
-
-            Button(action: linkAndSignIn) {
-                Text("Link & Sign In")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(store.sheets(for: selectedProvider)) { sheet in
+                        pinnedSheetWidget(sheet)
+                    }
+                    addSheetSection
+                }
             }
-            .liquidGlassButton(prominent: true)
-            .disabled(isBusy || linkText.trimmingCharacters(in: .whitespaces).isEmpty || !isProviderConfigured(selectedProvider))
+
+            if !statusMessage.isEmpty {
+                HStack {
+                    if isBusy { ProgressView().controlSize(.small) }
+                    Text(statusMessage).font(.caption).foregroundColor(.secondary).textSelection(.enabled)
+                }
+            }
+
+            Divider()
+            HStack {
+                Spacer()
+                Button("Close") { dismiss() }
+                    .keyboardShortcut(.escape, modifiers: [])
+            }
         }
         .padding()
-        .liquidGlassPanel(cornerRadius: 8)
+        .frame(minWidth: 560, minHeight: 480)
+        .onAppear { migrateLegacyLinkIfNeeded() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            signInRefreshTick.toggle()
+        }
+        .alert("Sheet Sync Error", isPresented: $showError) {
+            Button("OK", role: .cancel) { }
+        } message: { Text(errorMessage) }
+        .sheet(isPresented: $showReview) {
+            SyncReviewView(
+                mergeItems: $reviewMergeItems,
+                allMasterClips: projectManager.currentMasterList,
+                sourceLabel: activeSheet.map { "\(kind(of: $0).displayName) — \($0.title.isEmpty ? "Untitled Sheet" : $0.title)" } ?? selectedProvider.displayName,
+                supportsPush: true,
+                pushCandidates: $reviewPushCandidates,
+                onApply: {
+                    showReview = false
+                    applySync()
+                },
+                onCancel: { showReview = false }
+            )
+        }
     }
 
-    private func linkedView(kind: SheetSyncProviderKind, link: String) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label(kind.displayName, systemImage: "link")
-                .font(.headline)
-            Text(link)
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .lineLimit(2)
-                .truncationMode(.middle)
+    // MARK: - Pinned sheet widgets
 
-            if !resolvedSheetName.isEmpty {
-                Label("Last synced sheet: \(resolvedSheetName)", systemImage: "checkmark.circle.fill")
-                    .font(.caption)
-                    .foregroundColor(.green)
+    private func pinnedSheetWidget(_ sheet: PinnedSheet) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(sheet.title.isEmpty ? "Untitled Sheet" : sheet.title)
+                    .font(.headline)
+                Text(sheet.link)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
 
             HStack {
-                Button(action: compareNow) {
+                Button {
+                    activeSheetId = sheet.id
+                    compareNow(sheet)
+                } label: {
                     Label("Compare Now", systemImage: "arrow.triangle.2.circlepath")
                 }
                 .liquidGlassButton(prominent: true)
                 .disabled(isBusy)
 
-                Button("Unlink", role: .destructive) { unlink() }
+                Button("Unlink", role: .destructive) { store.remove(id: sheet.id) }
                     .disabled(isBusy)
+            }
+        }
+        .padding()
+        .liquidGlassPanel(cornerRadius: 8)
+    }
+
+    private var addSheetSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                showAddSheet.toggle()
+            } label: {
+                Label(showAddSheet ? "Cancel" : "Add Another Sheet", systemImage: showAddSheet ? "xmark.circle" : "plus.circle")
+            }
+            .buttonStyle(.plain)
+            .disabled(!isProviderConfigured(selectedProvider))
+
+            if showAddSheet {
+                TextField(selectedProvider.linkPlaceholder, text: $linkText)
+                    .textFieldStyle(.roundedBorder)
+
+                TextField("Sheet/Worksheet name (optional — defaults to the first)", text: $sheetNameText)
+                    .textFieldStyle(.roundedBorder)
+
+                Button(action: linkAndPin) {
+                    Text(isBusy ? "Linking…" : "Link & Pin")
+                }
+                .liquidGlassButton(prominent: true)
+                .disabled(isBusy || linkText.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
         .padding()
@@ -183,32 +208,45 @@ struct SheetSyncView: View {
         }
     }
 
-    private func unlink() {
+    // One-time migration from the old per-project single-sheet link (`Project.sheetSyncProvider/
+    // Link/SheetName`) into the new global store — only fires while the store is still empty, so
+    // opening a second project that also happens to carry a legacy link just pins a second sheet
+    // rather than re-migrating. The legacy fields are cleared off the project once migrated so
+    // this can't run again for it.
+    private func migrateLegacyLinkIfNeeded() {
+        guard store.pinnedSheets.isEmpty,
+              let providerRaw = project.sheetSyncProvider,
+              let link = project.sheetSyncLink else { return }
+        let pinned = PinnedSheet(provider: providerRaw, link: link, sheetName: project.sheetSyncSheetName, title: project.sheetSyncSheetName ?? "")
+        store.add(pinned)
         projectManager.updateSheetSyncLink(projectId: project.id, provider: nil, link: nil, sheetName: nil)
-        statusMessage = ""
-        resolvedSheetName = ""
+        if let migratedKind = SheetSyncProviderKind(rawValue: providerRaw) { selectedProvider = migratedKind }
     }
 
-    private func linkAndSignIn() {
+    private func linkAndPin() {
         let link = linkText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !link.isEmpty else { return }
         let sheetName = sheetNameText.trimmingCharacters(in: .whitespaces)
+        let provider = selectedProvider
         isBusy = true
-        statusMessage = "Signing in to \(selectedProvider.displayName)…"
-        ConsoleLogger.shared.log("▶️ Sheet Sync: linking \(selectedProvider.rawValue) — \(link)")
+        statusMessage = "Signing in to \(provider.displayName)…"
+        ConsoleLogger.shared.log("▶️ Sheet Sync: linking \(provider.rawValue) — \(link)")
 
         Task {
             do {
-                _ = try await SheetSyncScriptRunner.validToken(for: selectedProvider)
-                projectManager.updateSheetSyncLink(
-                    projectId: project.id,
-                    provider: selectedProvider.rawValue,
-                    link: link,
+                let token = try await SheetSyncScriptRunner.validToken(for: provider)
+                statusMessage = "Resolving sheet…"
+                let result = try await SheetSyncScriptRunner.run(
+                    action: "fetch", provider: provider, token: token, link: link,
                     sheetName: sheetName.isEmpty ? nil : sheetName
                 )
+                store.add(PinnedSheet(provider: provider.rawValue, link: link, sheetName: sheetName.isEmpty ? nil : sheetName, title: result.sheetName))
+                linkText = ""
+                sheetNameText = ""
+                showAddSheet = false
                 isBusy = false
-                statusMessage = "Linked. Ready to compare."
-                ConsoleLogger.shared.log("✅ Sheet Sync: linked and signed in to \(selectedProvider.rawValue)")
+                statusMessage = "Pinned \(result.sheetName.isEmpty ? "sheet" : result.sheetName)."
+                ConsoleLogger.shared.log("✅ Sheet Sync: pinned \(provider.rawValue) — \(result.sheetName)")
             } catch {
                 isBusy = false
                 ConsoleLogger.shared.log("❌ Sheet Sync sign-in failed: \(error)")
@@ -220,20 +258,20 @@ struct SheetSyncView: View {
 
     // MARK: - Compare
 
-    private func compareNow() {
-        guard let kind = linkedProviderKind, let link = project.sheetSyncLink else { return }
+    private func compareNow(_ sheet: PinnedSheet) {
+        guard let providerKind = SheetSyncProviderKind(rawValue: sheet.provider) else { return }
         isBusy = true
-        statusMessage = "Connecting to \(kind.displayName)…"
-        ConsoleLogger.shared.log("▶️ Sheet Sync: comparing against \(kind.rawValue) — \(link)")
+        statusMessage = "Connecting to \(providerKind.displayName)…"
+        ConsoleLogger.shared.log("▶️ Sheet Sync: comparing against \(providerKind.rawValue) — \(sheet.link)")
 
         Task {
             do {
-                let token = try await SheetSyncScriptRunner.validToken(for: kind)
+                let token = try await SheetSyncScriptRunner.validToken(for: providerKind)
                 let result = try await SheetSyncScriptRunner.run(
-                    action: "fetch", provider: kind, token: token, link: link,
-                    sheetName: project.sheetSyncSheetName
+                    action: "fetch", provider: providerKind, token: token, link: sheet.link,
+                    sheetName: sheet.sheetName
                 )
-                resolvedSheetName = result.sheetName
+                store.updateTitle(id: sheet.id, title: result.sheetName)
 
                 let remoteClips = result.rows.map { ClipData(dict: $0) }
                 let master = projectManager.currentMasterList
@@ -258,6 +296,8 @@ struct SheetSyncView: View {
     // MARK: - Apply
 
     private func applySync() {
+        guard let sheet = activeSheet, let providerKind = SheetSyncProviderKind(rawValue: sheet.provider) else { return }
+
         // Pull: apply every resolved field decision into the master list — MergeManager.applyMerge
         // takes the incoming value for any field the review resolved that way, and keeps the local
         // value otherwise.
@@ -284,16 +324,19 @@ struct SheetSyncView: View {
             rowsToPush.append(sheetRow(for: merged))
         }
 
-        guard !rowsToPush.isEmpty, let kind = linkedProviderKind, let link = project.sheetSyncLink else { return }
+        guard !rowsToPush.isEmpty else { return }
         isBusy = true
-        statusMessage = "Writing \(rowsToPush.count) row(s) to \(kind.displayName)…"
-        ConsoleLogger.shared.log("▶️ Sheet Sync: pushing \(rowsToPush.count) row(s) to \(kind.rawValue)")
+        statusMessage = "Writing \(rowsToPush.count) row(s) to \(providerKind.displayName)…"
+        ConsoleLogger.shared.log("▶️ Sheet Sync: pushing \(rowsToPush.count) row(s) to \(providerKind.rawValue)")
 
         Task {
             do {
-                let token = try await SheetSyncScriptRunner.validToken(for: kind)
-                let sheetName = resolvedSheetName.isEmpty ? project.sheetSyncSheetName : resolvedSheetName
-                _ = try await SheetSyncScriptRunner.run(action: "write", provider: kind, token: token, link: link, sheetName: sheetName, rows: rowsToPush)
+                let token = try await SheetSyncScriptRunner.validToken(for: providerKind)
+                let sheetName = sheet.title.isEmpty ? sheet.sheetName : sheet.title
+                // Only matters the first time a brand-new/empty sheet gets written to — see
+                // sheet_sync.py's build_header — but always safe to pass.
+                let columnOrder = MergeManager.orderedColumns(for: projectManager.currentMasterList)
+                _ = try await SheetSyncScriptRunner.run(action: "write", provider: providerKind, token: token, link: sheet.link, sheetName: sheetName, rows: rowsToPush, columnOrder: columnOrder)
                 isBusy = false
                 statusMessage = "Sync complete."
                 ConsoleLogger.shared.log("✅ Sheet Sync: push complete")
@@ -307,12 +350,6 @@ struct SheetSyncView: View {
     }
 
     private func sheetRow(for clip: ClipData) -> [String: String] {
-        var row = clip.dict
-        if (row["Resolve Unique ID"] ?? "").isEmpty {
-            // No Resolve-native ID (e.g. a manually-added local shot) — fall back to Resolver's
-            // own stable local ID so this row can still be matched back up on the next sync.
-            row["Resolve Unique ID"] = clip.id.uuidString
-        }
-        return row
+        clip.dict
     }
 }

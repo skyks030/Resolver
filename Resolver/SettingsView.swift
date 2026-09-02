@@ -2,7 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @AppStorage("thumbnailFormat") private var thumbnailFormat: String = "jpg"
-    @AppStorage("thumbnailHeight") private var thumbnailHeight: Int = 512
+    @AppStorage("thumbnailHeight") private var thumbnailHeight: Int = standardThumbnailHeight
     @AppStorage("thumbnailQuality") private var thumbnailQuality: Double = 0.8 // Future proofing? sips doesn't easily take quality with resample, but we can try.
     
     // Update Checker

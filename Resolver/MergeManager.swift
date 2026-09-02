@@ -22,7 +22,6 @@ enum MissingResolution: String, Codable {
 /// tiers (see `compareColumnAware`) — a match found by the generic column-overlap scorer instead
 /// carries `matchColumnScore`.
 enum MatchConfidence: String, Codable {
-    case uniqueId    // Resolve's own per-clip-instance ID matched exactly.
     case sourceRange // Same reel/media + identical Source In & Out — same source content,
                       // record TC (timeline position) is free to have moved (a reconform).
     case sourceTrim  // Same reel/media + same Source In + same duration, Source Out not
@@ -31,7 +30,6 @@ enum MatchConfidence: String, Codable {
 
     var label: String {
         switch self {
-        case .uniqueId: return "Resolve ID"
         case .sourceRange: return "Source TC"
         case .sourceTrim: return "Source TC (trimmed)"
         case .clipName: return "Clip Name"
@@ -62,10 +60,16 @@ struct MergeItem: Codable, Identifiable, Equatable {
     var confirmedNew: Bool = false
     /// User's decision for a `.missing` item (master row absent from this round's import/fetch).
     var missingResolution: MissingResolution? = nil
+    /// Columns this comparison deliberately doesn't treat as a discrepancy — e.g. "VFX Name" for
+    /// a DaVinci Resolve import, which never carries one at all (see
+    /// `MergeManager.compareColumnAware`'s `ignoredDiffKeys` parameter). Never counted in
+    /// `diffKeys`/`isResolved`, so the user is never asked to resolve something that isn't a real
+    /// discrepancy in the first place.
+    var ignoredKeys: Set<String> = []
 
     var diffKeys: [String] {
         guard let m = masterClip, let imp = importedClip else { return [] }
-        return MergeManager.diffKeys(master: m, imported: imp)
+        return MergeManager.diffKeys(master: m, imported: imp).filter { !ignoredKeys.contains($0) }
     }
 
     /// Whether this item is fully decided — i.e. no longer blocks the Resync button.
@@ -90,7 +94,7 @@ class MergeManager {
     private static let wellKnownColumnOrder: [String] = [
         "VFX Name", "TC In", "TC Out", "Source TC In", "Source TC Out", "Duration",
         "Reel Name", "File Names", "Episode", "Scene", "Frame Start", "Frame End",
-        "Resolve Unique ID",
+        "Thumbnail Updated",
     ]
 
     static func orderedColumns(for clips: [ClipData]) -> [String] {
@@ -124,8 +128,8 @@ class MergeManager {
     /// Reconform-aware, multi-signal matcher. Each imported clip is tested against the master
     /// pool in two passes:
     ///
-    /// 1. Tiered exact-signal matching (Unique ID → source range → source trim → clip name,
-    ///    strongest first) — cheap and precise; a tier only claims a match when exactly one
+    /// 1. Tiered exact-signal matching (source range → source trim → clip name, strongest
+    ///    first) — cheap and precise; a tier only claims a match when exactly one
     ///    unclaimed master clip qualifies (an ambiguous tie is left for pass 2 / manual review).
     /// 2. For everything still unmatched on both sides, a generic column-overlap scorer: every
     ///    remaining (imported, master) pair scores by how many dict columns agree (not just the
@@ -136,7 +140,11 @@ class MergeManager {
     /// Anything still unmatched after both passes becomes `.new` (the review UI's "unlinked
     /// pool"), carrying its closest near-misses in `candidateMasterClips` to speed up manual
     /// relinking. Already-removed master clips are excluded from matching entirely.
-    static func compareColumnAware(master: [ClipData], imported: [ClipData]) -> [MergeItem] {
+    ///
+    /// `ignoredDiffKeys` are columns a matched pair is never treated as disagreeing on (see
+    /// `MergeItem.ignoredKeys`) — e.g. "VFX Name" for a DaVinci Resolve import, which never
+    /// carries one, so every pair would otherwise show a bogus conflict on that field alone.
+    static func compareColumnAware(master: [ClipData], imported: [ClipData], ignoredDiffKeys: Set<String> = []) -> [MergeItem] {
         let activeMaster = master.filter { !$0.isRemoved }
         var results = [MergeItem?](repeating: nil, count: imported.count)
         var claimedMasterIds = Set<UUID>()
@@ -154,7 +162,7 @@ class MergeManager {
                 if matches.count == 1 {
                     let masterClip = matches[0]
                     claimedMasterIds.insert(masterClip.id)
-                    results[idx] = makeItem(masterClip: masterClip, imported: imp, confidence: tier.confidence, score: nil)
+                    results[idx] = makeItem(masterClip: masterClip, imported: imp, confidence: tier.confidence, score: nil, ignoredKeys: ignoredDiffKeys)
                 } else if candidatesByImport[idx] == nil {
                     candidatesByImport[idx] = matches
                 }
@@ -185,7 +193,7 @@ class MergeManager {
             for c in candidates {
                 guard results[c.importIdx] == nil, !claimedMasterIds.contains(c.master.id) else { continue }
                 claimedMasterIds.insert(c.master.id)
-                results[c.importIdx] = makeItem(masterClip: c.master, imported: imported[c.importIdx], confidence: nil, score: c.score)
+                results[c.importIdx] = makeItem(masterClip: c.master, imported: imported[c.importIdx], confidence: nil, score: c.score, ignoredKeys: ignoredDiffKeys)
             }
         }
 
@@ -207,14 +215,12 @@ class MergeManager {
     // MARK: - Smart matching internals
 
     private enum MatchTier: CaseIterable {
-        case uniqueId
         case sourceRange
         case sourceTrim
         case clipName
 
         var confidence: MatchConfidence {
             switch self {
-            case .uniqueId: return .uniqueId
             case .sourceRange: return .sourceRange
             case .sourceTrim: return .sourceTrim
             case .clipName: return .clipName
@@ -238,10 +244,6 @@ class MergeManager {
 
     private static func candidateMasters(for tier: MatchTier, imp: ClipData, master: [ClipData]) -> [ClipData] {
         switch tier {
-        case .uniqueId:
-            guard let impId = imp.uniqueId, !impId.isEmpty else { return [] }
-            return master.filter { $0.uniqueId == impId }
-
         case .sourceRange:
             let impMedia = mediaKey(imp)
             let impIn = norm(imp.sourceTcIn), impOut = norm(imp.sourceTcOut)
@@ -278,14 +280,15 @@ class MergeManager {
         return score
     }
 
-    private static func makeItem(masterClip: ClipData, imported: ClipData, confidence: MatchConfidence?, score: Int?) -> MergeItem {
-        let keys = diffKeys(master: masterClip, imported: imported)
+    private static func makeItem(masterClip: ClipData, imported: ClipData, confidence: MatchConfidence?, score: Int?, ignoredKeys: Set<String>) -> MergeItem {
+        let keys = diffKeys(master: masterClip, imported: imported).filter { !ignoredKeys.contains($0) }
         return MergeItem(
             masterClip: masterClip,
             importedClip: imported,
             state: keys.isEmpty ? .identical : .modified,
             matchConfidence: confidence,
-            matchColumnScore: score
+            matchColumnScore: score,
+            ignoredKeys: ignoredKeys
         )
     }
 
@@ -308,7 +311,7 @@ class MergeManager {
                 guard let masterClip = item.masterClip, let imp = item.importedClip,
                       let idx = master.firstIndex(where: { $0.id == masterClip.id }) else { continue }
                 var merged = masterClip
-                for key in diffKeys(master: masterClip, imported: imp) {
+                for key in item.diffKeys {
                     if item.fieldWinners[key] == .incoming {
                         merged.dict[key] = imp.dict[key]
                     }
@@ -348,11 +351,17 @@ class MergeManager {
             case .new:
                 if let imp = item.importedClip { master.append(imp) }
             case .modified:
+                // Merge rather than wholesale-replace: an import that simply doesn't carry a
+                // field (e.g. DaVinci Resolve never supplies VFX Name) must not blank out
+                // whatever master already has there — only a genuinely non-empty incoming value
+                // overwrites.
                 if let masterClip = item.masterClip, let imp = item.importedClip,
                    let idx = master.firstIndex(where: { $0.id == masterClip.id }) {
-                    var updated = imp
-                    updated.id = masterClip.id
-                    master[idx] = updated
+                    var merged = masterClip
+                    for (key, value) in imp.dict where !value.isEmpty {
+                        merged.dict[key] = value
+                    }
+                    master[idx] = merged
                 }
             case .identical, .missing:
                 break

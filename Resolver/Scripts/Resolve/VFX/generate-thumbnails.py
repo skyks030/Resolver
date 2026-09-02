@@ -2,6 +2,7 @@
 
 import sys
 import os
+import re
 import importlib.util
 import json
 import time
@@ -33,7 +34,7 @@ except Exception as e:
     print(json.dumps({"error": f"Failed to parse JSON: {e}"}))
     sys.exit(1)
 
-# === Helper: Frames to TC ===
+# === Helper: Frames to TC / TC to Frames ===
 def frames_to_tc(frames, fps):
     try:
         if not fps or float(fps) == 0.0: return "00:00:00:00"
@@ -44,8 +45,39 @@ def frames_to_tc(frames, fps):
         seconds = int(total_seconds % 60)
         frame_part = int(frames % fps_float)
         return "{:02}:{:02}:{:02}:{:02}".format(hours, minutes, seconds, frame_part)
-    except:
+    except Exception:
         return "00:00:00:00"
+
+def tc_to_frames(tc, fps):
+    try:
+        if not tc: return None
+        parts = tc.split(':')
+        if len(parts) != 4: return None
+        h, m, s, f = map(int, parts)
+        if not fps or float(fps) == 0.0: return None
+        return int((h * 3600 + m * 60 + s) * float(fps) + f)
+    except Exception:
+        return None
+
+def target_frame_for(tc_in, tc_out, fps, frame_position):
+    """Resolves which timeline frame to grab the still from, per the user's chosen
+    First/Middle/Last Frame option — computed from the shot's own Record TC In/Out, not a
+    separately-tracked frame count (which isn't reliably populated for every clip)."""
+    in_frame = tc_to_frames(tc_in, fps)
+    if in_frame is None:
+        return None
+    out_frame = tc_to_frames(tc_out, fps)
+    if out_frame is None or out_frame <= in_frame:
+        # No usable out point (or a degenerate/zero-length range) — first frame is the only
+        # position we can trust.
+        return in_frame
+
+    last_frame = out_frame - 1  # Record TC Out is exclusive — one frame past the shot's last frame.
+    if frame_position == "end":
+        return max(in_frame, last_frame)
+    if frame_position == "middle":
+        return in_frame + (last_frame - in_frame) // 2
+    return in_frame
 
 def find_timeline(project, unique_id, name):
     """Look up a registered Timeline object by unique id (preferred, stable across
@@ -83,7 +115,8 @@ def find_timeline(project, unique_id, name):
 output_dir = data.get("outputDir")
 clips = data.get("clips", [])
 export_format = data.get("format", "jpg")
-resize_height = int(data.get("resizeHeight", 512))
+resize_height = int(data.get("resizeHeight", 512))  # 0 = Original / no downscale
+frame_position = data.get("framePosition", "start")  # "start" | "middle" | "end"
 
 if not output_dir or not clips:
     print(json.dumps({"error": "Invalid JSON data (missing outputDir or clips)"}))
@@ -129,8 +162,7 @@ try:
     original_timeline = project.GetCurrentTimeline()
     log(f"Original timeline: {original_timeline.GetName() if original_timeline else 'None currently open'}")
 
-    target_track_index = int(data.get("targetTrack", 1))
-    log(f"{len(clips)} shot(s) requested, target track={target_track_index}")
+    log(f"{len(clips)} shot(s) requested, frame position={frame_position}")
 
     # Group clips by resolved target timeline (per-clip "timelineUniqueId"/"timelineName", set
     # client-side from the Episode Manager). A clip with no hint — or an unresolvable one — falls
@@ -181,35 +213,32 @@ try:
             raise Exception("Could not access Gallery (GetGallery returned None)")
 
         # === Album Management ===
-        # SIMPLIFIED STRATEGY for Production Stability
-        # 1. Try to get Current Album. If it exists, use it.
-        # 2. If valid albums exist, use the first one.
-        # 3. Only try to find "resolver_temp_stills" if we have options, but don't force it if it breaks things.
+        # A dedicated, deterministically-named album owned by this script — created once and
+        # reused on later runs, rather than guessing among whatever albums happen to already
+        # exist (the album name is looked up/set via Gallery.GetAlbumName/SetAlbumName; those are
+        # the only documented rename calls — GalleryStillAlbum.GetLabel/SetLabel are a different,
+        # per-still API and were being called on the album by mistake in an earlier version of
+        # this script, which is why the album could never actually get renamed and kept showing
+        # up "Nameless" on every run).
+        ALBUM_NAME = "Resolver_Stills"
+        log("Getting Gallery Still Albums...")
 
-        log("Getting Current Still Album...")
-
-        albums = gallery.GetGalleryStillAlbums()
-        target_album = gallery.GetCurrentStillAlbum()
-
-        if not target_album and albums:
-            target_album = albums[0]
-
-        if target_album:
-             lbl = target_album.GetLabel()
-             if not lbl:
-                 print(json.dumps({"status": "warning", "message": "Album is nameless. Renaming to 'Resolver_Stills'."}))
-                 if target_album.SetLabel("Resolver_Stills"):
-                     lbl = "Resolver_Stills"
-                 else:
-                     print(json.dumps({"status": "error", "message": "Failed to rename nameless album."}))
-
-             log(f"Using album: {lbl}")
-             gallery.SetCurrentStillAlbum(target_album)
+        albums = gallery.GetGalleryStillAlbums() or []
+        target_album = next((a for a in albums if gallery.GetAlbumName(a) == ALBUM_NAME), None)
 
         if not target_album:
-            err_msg = "No valid Still Album found (and list is empty). Please create a 'Stills' album in Color Page."
+            log(f"No existing '{ALBUM_NAME}' album — creating one.")
+            target_album = gallery.CreateGalleryStillAlbum()
+            if target_album and not gallery.SetAlbumName(target_album, ALBUM_NAME):
+                print(json.dumps({"status": "warning", "message": f"Created a still album but couldn't rename it to '{ALBUM_NAME}'."}))
+
+        if not target_album:
+            err_msg = "Could not find or create a Gallery Still Album (CreateGalleryStillAlbum failed). Please create one manually in Color Page > Gallery."
             print(json.dumps({"status": "error", "message": err_msg}))
             raise Exception(err_msg) # Abort immediately
+
+        log(f"Using album: {gallery.GetAlbumName(target_album) or ALBUM_NAME}")
+        gallery.SetCurrentStillAlbum(target_album)
 
         # === Main Loop, grouped per resolved timeline ===
         processed_count = 0
@@ -230,48 +259,19 @@ try:
                 sys.stdout.flush()
                 continue
 
-            # === Track Management (per timeline — each timeline has its own track layout) ===
-            track_states = {}
-            track_count = timeline.GetTrackCount("video")
-            try:
-                for i in range(1, track_count + 1):
-                     try:
-                         # API Check: Some versions use GetTrackEnable, others GetIsTrackEnabled
-                         if hasattr(timeline, "GetIsTrackEnabled"):
-                             state = timeline.GetIsTrackEnabled("video", i)
-                         elif hasattr(timeline, "GetTrackEnable"):
-                             state = timeline.GetTrackEnable("video", i)
-                         else:
-                             state = True
-
-                         track_states[i] = state
-                     except Exception as e:
-                         print(json.dumps({"status": "warning", "message": f"Failed to read track state {i}: {e}"}))
-                         track_states[i] = True
-
-                # Solo Target Track
-                for i in range(1, track_count + 1):
-                     should_enable = (i == target_track_index)
-                     if hasattr(timeline, "SetTrackEnable"):
-                         timeline.SetTrackEnable("video", i, should_enable)
-            except Exception as e:
-                print(json.dumps({"status": "error", "message": f"Track Setup Failed on '{timeline.GetName()}': {e}"}))
-
+            # No track soloing — the still is grabbed exactly as the timeline currently looks
+            # (whatever video tracks/clips are enabled/visible stay that way).
             try:
                 for clip in group_clips:
                     name = clip["name"]
                     try:
-                        frame_start = int(clip.get("frameStart", 0))
-                        frame_end = int(clip.get("frameEnd", 0))
-
                         # Get timeline frame rate
                         fps = timeline.GetSetting("timelineFrameRate")
 
-                        # Revert to First Frame (User Request)
-                        # We use the provided 'tc' (which is Start TC) or calculate from frameStart
-                        target_tc = clip.get("tc", "")
-                        if not target_tc and frame_start > 0:
-                             target_tc = frames_to_tc(frame_start, fps)
+                        tc_in = clip.get("tcIn", "")
+                        tc_out = clip.get("tcOut", "")
+                        target_frame = target_frame_for(tc_in, tc_out, fps, frame_position)
+                        target_tc = frames_to_tc(target_frame, fps) if target_frame is not None else tc_in
 
                         if target_tc:
                              timeline.SetCurrentTimecode(target_tc)
@@ -282,7 +282,7 @@ try:
                             gallery.SetCurrentStillAlbum(target_album)
 
                         # Grab Still
-                        log(f"Grabbing still for '{name}' at {target_tc or frame_start} ({processed_count + 1}/{total_clips})...")
+                        log(f"Grabbing still for '{name}' at {target_tc} ({processed_count + 1}/{total_clips})...")
                         still = timeline.GrabStill()
                         time.sleep(0.05) # Brief pause to ensures still is ready
 
@@ -291,9 +291,7 @@ try:
                             still = timeline.GrabStill()
 
                         if still:
-                            # Clean up existing files for this clip name to prevent duplicates/stale files
-                            # === ROBUST EXPORT STRATEGY ===
-
+                            # === EXPORT ===
                             # 1. Snapshot valid files before
                             files_before = set(os.listdir(output_dir))
 
@@ -301,67 +299,39 @@ try:
                             import uuid
                             temp_export_name = str(uuid.uuid4())
 
-                            # === EXPORT STRATEGY: BRUTE FORCE ===
-                            # GrabStill puts the still somewhere. If we can't find it in Current, check ALL albums.
+                            if not os.access(output_dir, os.W_OK):
+                                print(json.dumps({"status": "error", "message": f"Output dir not writable: {output_dir}"}))
 
-                            success = False
-                            export_album = None
-
-                            # Build list of albums to try (Current first, then others)
-                            albums_to_try = []
-
-                            # Trust Current Album first and foremost
-                            current = gallery.GetCurrentStillAlbum()
-                            if current:
-                                albums_to_try.append(current)
-
-                            all_albums = gallery.GetGalleryStillAlbums()
-                            if all_albums:
-                                for a in all_albums:
-                                    # Don't skip nameless albums - Production might only have one!
-                                    is_duplicate = False
-                                    if current:
-                                         if a.GetLabel() and current.GetLabel() and a.GetLabel() == current.GetLabel():
-                                             is_duplicate = True
-
-                                    if not is_duplicate:
-                                        albums_to_try.append(a)
-
-                            # Fallback
-                            if not albums_to_try and target_album:
-                                albums_to_try.append(target_album)
-
-                            album_names = [a.GetLabel() if a.GetLabel() else "Nameless" for a in albums_to_try]
-
-                            # Try Export
-                            for album in albums_to_try:
-                                # Validate output dir access
-                                if not os.access(output_dir, os.W_OK):
-                                     print(json.dumps({"status": "error", "message": f"Output dir not writable: {output_dir}"}))
-
-                                if album.ExportStills([still], output_dir, temp_export_name, export_format):
-                                    success = True
-                                    export_album = album
-                                    break
-                                else:
-                                     pass
+                            # Export straight to our own dedicated album (see Album Management
+                            # above) — no more guessing across every album in the project. One
+                            # retry after a brief pause in case Resolve's Gallery state needs a
+                            # moment to catch up right after GrabStill.
+                            success = target_album.ExportStills([still], output_dir, temp_export_name, export_format)
+                            if not success:
+                                time.sleep(0.2)
+                                success = target_album.ExportStills([still], output_dir, temp_export_name, export_format)
 
                             if not success:
                                 # FATAL ERROR - Abort Script
-                                err_msg = f"FATAL: ExportStills failed from ALL {len(albums_to_try)} albums for {name}. Albums: {album_names} Dir: {output_dir}"
+                                err_msg = (
+                                    f"FATAL: ExportStills failed for {name} into album "
+                                    f"'{gallery.GetAlbumName(target_album) or ALBUM_NAME}'. Dir: {output_dir}. "
+                                    "In DaVinci Resolve, open the Color Page and check the Gallery panel — make "
+                                    f"sure a Still Album (ideally named '{ALBUM_NAME}') is visible there, then "
+                                    "try again."
+                                )
                                 print(json.dumps({"status": "error", "message": err_msg}))
 
                                 # Try to cleanup the still so it doesn't pile up
                                 try:
-                                    if current: current.DeleteStills([still])
-                                    elif target_album: target_album.DeleteStills([still])
-                                except:
+                                    target_album.DeleteStills([still])
+                                except Exception:
                                     pass
 
                                 raise Exception(err_msg) # Abort processing
                             else:
                                 # Cleanup success
-                                export_album.DeleteStills([still])
+                                target_album.DeleteStills([still])
 
                                 # 3. Snapshot files after
                                 files_after = set(os.listdir(output_dir))
@@ -371,32 +341,53 @@ try:
                                 image_files = [f for f in new_files if f.lower().endswith(f".{export_format}")]
 
                                 if len(image_files) >= 1:
-                                    # We found a new file! Rename it to what we want: `vfxName.jpg`.
+                                    # We found a new file! Rename it to `vfxName_YYYYMMDD-HHMMSS.jpg` —
+                                    # the timestamp lets freshness be checked at a glance (on disk, or
+                                    # via ClipData's "Thumbnail Updated" column the Swift side stamps
+                                    # from this file's modification date) without needing to open it.
                                     exported_filename = image_files[0]
                                     exported_path = os.path.join(output_dir, exported_filename)
 
-                                    target_filename = f"{name}.{export_format}"
+                                    timestamp = time.strftime("%Y%m%d-%H%M%S")
+                                    target_filename = f"{name}_{timestamp}.{export_format}"
                                     target_path = os.path.join(output_dir, target_filename)
 
-                                    if exported_filename != target_filename:
-                                        try:
-                                            if os.path.exists(target_path):
-                                                os.remove(target_path)
-                                            os.rename(exported_path, target_path)
-                                        except Exception as mv_err:
-                                            print(json.dumps({"status": "warning", "message": f"Failed to rename {exported_filename}: {mv_err}"}))
-                                            target_path = exported_path
+                                    # Remove this exact clip's older thumbnail(s) — both this
+                                    # timestamped naming scheme and the old stable `name.ext` one —
+                                    # so a regenerate doesn't leave stale files lying around next to
+                                    # the new one (which would make "the" thumbnail for this clip
+                                    # ambiguous to any by-name file lookup). Matched with a regex
+                                    # (not just startswith) so a clip whose name is a strict prefix
+                                    # of another's (e.g. "SH010" vs "SH010A") never deletes its
+                                    # neighbor's thumbnail.
+                                    escaped_name = re.escape(name)
+                                    old_pattern = re.compile(
+                                        rf"^{escaped_name}(?:_\d{{8}}-\d{{6}})?\.[^.]+$"
+                                    )
+                                    for f in os.listdir(output_dir):
+                                        if f != exported_filename and old_pattern.match(f):
+                                            try:
+                                                os.remove(os.path.join(output_dir, f))
+                                            except Exception:
+                                                pass
 
-                                    # 4. Resize
                                     try:
-                                        result = subprocess.run(
-                                            ["sips", "--resampleHeight", str(resize_height), target_path],
-                                            capture_output=True,
-                                            text=True,
-                                            check=False
-                                        )
-                                    except Exception as sips_err:
-                                            print(json.dumps({"status": "warning", "message": f"Sips error: {sips_err}"}))
+                                        os.rename(exported_path, target_path)
+                                    except Exception as mv_err:
+                                        print(json.dumps({"status": "warning", "message": f"Failed to rename {exported_filename}: {mv_err}"}))
+                                        target_path = exported_path
+
+                                    # 4. Resize (resize_height <= 0 means "Original" — leave it untouched)
+                                    if resize_height > 0:
+                                        try:
+                                            result = subprocess.run(
+                                                ["sips", "--resampleHeight", str(resize_height), target_path],
+                                                capture_output=True,
+                                                text=True,
+                                                check=False
+                                            )
+                                        except Exception as sips_err:
+                                                print(json.dumps({"status": "warning", "message": f"Sips error: {sips_err}"}))
 
                                 else:
                                      print(json.dumps({"status": "warning", "message": f"No new image file detected for {name} (Export requested as {temp_export_name})."}))
@@ -418,10 +409,7 @@ try:
                          traceback.print_exc()
                          # Continue to next
             finally:
-                # Restore this timeline's track states before moving to the next group.
-                for i, state in track_states.items():
-                    if hasattr(timeline, "SetTrackEnable"):
-                        timeline.SetTrackEnable("video", i, state)
+                pass  # No track state to restore — thumbnails no longer solo a track.
             log(f"Finished timeline '{timeline.GetName()}'. Total processed so far: {processed_count}/{total_clips}")
     finally:
         # Restore whatever timeline was open before this run, so Resolve's UI doesn't end up

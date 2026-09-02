@@ -24,19 +24,74 @@ struct SyncReviewView: View {
     /// import (one-way — local-only rows instead surface as `.missing` items in `mergeItems`).
     let supportsPush: Bool
     @Binding var pushCandidates: [PushCandidate]
+    /// Columns never treated as a discrepancy in this review — e.g. "VFX Name" for a DaVinci
+    /// Resolve import, which never carries one at all. Defaults to none (Sheet Sync's call site
+    /// doesn't pass this — a spreadsheet can legitimately carry a real VFX Name).
+    var ignoredDiffKeys: Set<String> = []
     let onApply: () -> Void
     let onCancel: () -> Void
 
-    @State private var hideMatching = false
+    // Hides every item with no remaining discrepancy — not just `.identical` matches, but any
+    // `.modified`/`.new`/`.missing` item the user has fully resolved too — so cleaning up the
+    // last field on a conflict makes it disappear immediately, same as a plain match, letting
+    // the list progressively narrow down to only what still needs attention.
+    @State private var hideResolved = false
     @State private var relinkTarget: UUID? = nil
     private let columnWidth: CGFloat = 150
+    private let gutterWidth: CGFloat = 112
+    // Consistent color coding wherever the two sides are stacked, so which physical row is which
+    // is obvious at a glance without reading the label every time.
+    private let remoteColor = Color.blue
+    private let masterColor = Color.purple
 
-    private var unlinkedItems: [MergeItem] { mergeItems.filter { $0.state == .new } }
-    private var conflictItems: [MergeItem] { mergeItems.filter { $0.state == .modified || $0.state == .missing } }
+    // "Needs a Match" groups both sides of what the matcher couldn't pair up at all — an
+    // unmatched remote/imported shot and an unmatched master shot are the same *kind* of problem
+    // (nothing to compare against yet), just from opposite sides, so they're shown together up
+    // top instead of the master-side half being buried among genuine field-level conflicts.
+    private var unmatchedRemoteItems: [MergeItem] { mergeItems.filter { $0.state == .new } }
+    private var unmatchedMasterItems: [MergeItem] { mergeItems.filter { $0.state == .missing } }
+    // Conflicts now holds only pairs the matcher *did* successfully link but that still differ on
+    // some field — a materially different problem (resolve a value, not find a match).
+    private var conflictItems: [MergeItem] { mergeItems.filter { $0.state == .modified } }
     private var matchedItems: [MergeItem] { mergeItems.filter { $0.state == .identical } }
+
+    /// `hideResolved`-filtered versions of the groups above — what actually gets rendered.
+    /// `matchedItems` are always resolved, so this is also what subsumed the old "Hide Matching"
+    /// behavior: turning it on empties that section along with everything else that's clean.
+    private func visible(_ items: [MergeItem]) -> [MergeItem] { hideResolved ? items.filter { !$0.isResolved } : items }
+    private var visibleUnmatchedRemote: [MergeItem] { visible(unmatchedRemoteItems) }
+    private var visibleUnmatchedMaster: [MergeItem] { visible(unmatchedMasterItems) }
+    private var visibleConflictItems: [MergeItem] { visible(conflictItems) }
+    private var visibleMatchedItems: [MergeItem] { visible(matchedItems) }
 
     private var allColumns: [String] {
         MergeManager.orderedColumns(for: mergeItems.flatMap { [$0.masterClip, $0.importedClip].compactMap { $0 } })
+    }
+
+    /// `allColumns`, but with every column that has at least one still-visible conflict pulled
+    /// forward (right after VFX Name, which always leads) — so scanning left-to-right always
+    /// surfaces what still needs a decision before scrolling through untouched columns.
+    private var displayColumns: [String] {
+        let cols = allColumns
+        let conflictCols = Set(visibleConflictItems.flatMap(\.diffKeys))
+        var result: [String] = []
+        if cols.contains("VFX Name") { result.append("VFX Name") }
+        let rest = cols.filter { $0 != "VFX Name" }
+        result += rest.filter { conflictCols.contains($0) }
+        result += rest.filter { !conflictCols.contains($0) }
+        return result
+    }
+
+    /// A clip's VFX Name if it has one; otherwise a fallback built from its source file and
+    /// Record TC In, so a shot is never shown with a blank title — e.g. every shot on the import
+    /// side of a DaVinci Resolve index, which never carries a VFX Name at all.
+    private func displayName(for clip: ClipData?) -> String {
+        guard let clip else { return "" }
+        if !clip.vfxName.isEmpty { return clip.vfxName }
+        let file = clip.fileNames, tc = clip.tcIn
+        if file.isEmpty { return tc }
+        if tc.isEmpty { return file }
+        return "\(file) @ \(tc)"
     }
 
     private var allResolved: Bool { mergeItems.allSatisfy(\.isResolved) }
@@ -59,17 +114,23 @@ struct SyncReviewView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    unlinkedSection
+                    needsMatchSection
                     conflictsSection
                     if supportsPush { pushSection }
                     matchedSection
 
-                    if unlinkedItems.isEmpty && conflictItems.isEmpty && matchedItems.isEmpty
+                    if visibleUnmatchedRemote.isEmpty && visibleUnmatchedMaster.isEmpty && visibleConflictItems.isEmpty && visibleMatchedItems.isEmpty
                         && (!supportsPush || pushCandidates.isEmpty) {
-                        Text("Nothing found to sync.")
-                            .foregroundColor(.secondary)
-                            .frame(maxWidth: .infinity)
-                            .padding()
+                        Group {
+                            if hideResolved && !mergeItems.isEmpty {
+                                Text("Everything is resolved. Turn off \"Hide Resolved\" to review it again, or Resync below.")
+                            } else {
+                                Text("Nothing found to sync.")
+                            }
+                        }
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding()
                     }
                 }
                 .padding()
@@ -110,14 +171,21 @@ struct SyncReviewView: View {
             }
             Spacer()
             HStack(spacing: 16) {
-                Label("\(unlinkedItems.count) Unlinked", systemImage: "questionmark.circle.fill")
-                    .foregroundColor(unlinkedItems.isEmpty ? .secondary : .orange)
+                let needsMatchCount = unmatchedRemoteItems.count + unmatchedMasterItems.count
+                Label("\(needsMatchCount) Needs Match", systemImage: "questionmark.circle.fill")
+                    .foregroundColor(needsMatchCount == 0 ? .secondary : .orange)
                 Label("\(conflictItems.count) Conflicts", systemImage: "exclamationmark.triangle.fill")
                     .foregroundColor(conflictItems.isEmpty ? .secondary : .red)
                 Label("\(matchedItems.count) Matched", systemImage: "checkmark.circle.fill")
                     .foregroundColor(.green)
             }
             .font(.subheadline)
+
+            Divider().frame(height: 20)
+
+            Button(hideResolved ? "Show Resolved" : "Hide Resolved") { hideResolved.toggle() }
+                .controlSize(.small)
+                .help("Hide every shot with no remaining discrepancy, matches included, so only what still needs attention stays visible.")
         }
         .padding()
         .liquidGlassBar()
@@ -144,16 +212,37 @@ struct SyncReviewView: View {
         .padding()
     }
 
-    // MARK: - Unlinked pool
+    // MARK: - Needs a Match
 
+    // Both unmatched sides shown together but clearly split into their own sub-lists — an
+    // unmatched remote shot and an unmatched master shot are the same underlying problem (nothing
+    // to compare against yet) from opposite directions.
     @ViewBuilder
-    private var unlinkedSection: some View {
-        if !unlinkedItems.isEmpty {
-            section(title: "Unlinked — needs a match", systemImage: "questionmark.circle.fill", color: .orange) {
-                VStack(spacing: 0) {
-                    ForEach(unlinkedItems) { item in
-                        unlinkedRow(item: item)
-                        Divider()
+    private var needsMatchSection: some View {
+        if !visibleUnmatchedRemote.isEmpty || !visibleUnmatchedMaster.isEmpty {
+            section(title: "Needs a Match", systemImage: "questionmark.circle.fill", color: .orange) {
+                VStack(alignment: .leading, spacing: 14) {
+                    if !visibleUnmatchedRemote.isEmpty {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Remote List").font(.caption).bold().foregroundColor(remoteColor)
+                            VStack(spacing: 0) {
+                                ForEach(visibleUnmatchedRemote) { item in
+                                    unlinkedRow(item: item)
+                                    Divider()
+                                }
+                            }
+                        }
+                    }
+                    if !visibleUnmatchedMaster.isEmpty {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("VFX Master List").font(.caption).bold().foregroundColor(masterColor)
+                            VStack(spacing: 0) {
+                                ForEach(visibleUnmatchedMaster) { item in
+                                    missingRow(item: item)
+                                    Divider()
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -163,7 +252,7 @@ struct SyncReviewView: View {
     private func unlinkedRow(item: MergeItem) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(item.importedClip?.vfxName ?? "").bold()
+                Text(displayName(for: item.importedClip)).bold()
                 if !item.candidateMasterClips.isEmpty {
                     Text("\(item.candidateMasterClips.count) similar shot(s) found — review before linking")
                         .font(.caption2)
@@ -196,17 +285,13 @@ struct SyncReviewView: View {
 
     @ViewBuilder
     private var conflictsSection: some View {
-        if !conflictItems.isEmpty {
+        if !visibleConflictItems.isEmpty {
             section(title: "Conflicts — resolve each difference", systemImage: "exclamationmark.triangle.fill", color: .red) {
                 ScrollView(.horizontal) {
                     VStack(alignment: .leading, spacing: 18) {
                         columnHeaderRow
-                        ForEach(conflictItems) { item in
-                            if item.state == .modified {
-                                conflictPair(itemId: item.id)
-                            } else {
-                                missingPair(itemId: item.id)
-                            }
+                        ForEach(visibleConflictItems) { item in
+                            conflictPair(itemId: item.id)
                         }
                     }
                 }
@@ -216,8 +301,8 @@ struct SyncReviewView: View {
 
     private var columnHeaderRow: some View {
         HStack(spacing: 0) {
-            Text("").frame(width: 90, alignment: .leading) // gutter for row labels/actions
-            ForEach(allColumns, id: \.self) { col in
+            Text("").frame(width: gutterWidth, alignment: .leading) // gutter for row labels
+            ForEach(displayColumns, id: \.self) { col in
                 Text(col).font(.caption).bold().foregroundColor(.secondary)
                     .frame(width: columnWidth, alignment: .leading)
             }
@@ -233,15 +318,15 @@ struct SyncReviewView: View {
 
     private func conflictPair(itemId: UUID) -> some View {
         let item = itemBinding(itemId)
-        return VStack(alignment: .leading, spacing: 4) {
+        let cols = displayColumns
+        return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                Text(item.wrappedValue.importedClip?.vfxName ?? "").bold()
+                Text(displayName(for: item.wrappedValue.importedClip)).bold()
                 if let confidence = item.wrappedValue.matchConfidence {
                     Text("via \(confidence.label)").font(.caption2).foregroundColor(.secondary)
                 } else if let score = item.wrappedValue.matchColumnScore {
                     Text("via \(score) shared column\(score == 1 ? "" : "s")").font(.caption2).foregroundColor(.secondary)
                 }
-                Spacer()
                 Button("Accept All Incoming") { resolveAll(itemId: itemId, winner: .incoming) }
                     .font(.caption).buttonStyle(.plain).foregroundColor(.accentColor)
                 Button("Keep All Local") { resolveAll(itemId: itemId, winner: .master) }
@@ -250,17 +335,16 @@ struct SyncReviewView: View {
                     Label("Break Link", systemImage: "link.badge.plus")
                 }
                 .buttonStyle(.plain).font(.caption).foregroundColor(.red)
+                Spacer()
             }
 
-            HStack(spacing: 0) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Incoming").font(.caption2).foregroundColor(.secondary)
-                    Text("Local").font(.caption2).foregroundColor(.secondary)
+            VStack(alignment: .leading, spacing: 0) {
+                rowLine(label: "Remote List", color: remoteColor) {
+                    ForEach(cols, id: \.self) { col in valueCell(item: item, key: col, side: .incoming) }
                 }
-                .frame(width: 90, alignment: .leading)
-
-                ForEach(allColumns, id: \.self) { col in
-                    conflictCell(item: item, key: col)
+                arrowsLine(item: item, cols: cols)
+                rowLine(label: "VFX Master List", color: masterColor) {
+                    ForEach(cols, id: \.self) { col in valueCell(item: item, key: col, side: .master) }
                 }
             }
         }
@@ -268,110 +352,114 @@ struct SyncReviewView: View {
         .liquidGlassPanel(cornerRadius: 8)
     }
 
+    private enum RowSide { case incoming, master }
+
     @ViewBuilder
-    private func conflictCell(item: Binding<MergeItem>, key: String) -> some View {
-        let differs = item.wrappedValue.diffKeys.contains(key)
-        let incoming = item.wrappedValue.importedClip?.dict[key] ?? ""
-        let local = item.wrappedValue.masterClip?.dict[key] ?? ""
-        let winner = item.wrappedValue.fieldWinners[key]
-
-        VStack(alignment: .leading, spacing: 2) {
-            Text(incoming.isEmpty ? "–" : incoming)
-                .font(.caption)
-                .strikethrough(differs && winner == .master)
-                .foregroundColor(differs && winner == .master ? .secondary : .primary)
-
-            if differs {
-                HStack(spacing: 6) {
-                    Button { setWinner(itemId: item.wrappedValue.id, key: key, winner: .incoming) } label: {
-                        Image(systemName: winner == .incoming ? "arrow.down.circle.fill" : "arrow.down.circle")
-                    }
-                    .help("Overwrite local with incoming value")
-                    Button { setWinner(itemId: item.wrappedValue.id, key: key, winner: .master) } label: {
-                        Image(systemName: winner == .master ? "arrow.up.circle.fill" : "arrow.up.circle")
-                    }
-                    .help("Keep local value, reject incoming")
-                }
-                .buttonStyle(.plain)
-                .foregroundColor(winner == nil ? .red : .accentColor)
-            } else {
-                Color.clear.frame(height: 14)
-            }
-
-            Text(local.isEmpty ? "–" : local)
-                .font(.caption)
-                .strikethrough(differs && winner == .incoming)
-                .foregroundColor(differs && winner == .incoming ? .secondary : .primary)
+    private func rowLine<Content: View>(label: String, color: Color, @ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: 0) {
+            Text(label)
+                .font(.caption2).bold()
+                .foregroundColor(color)
+                .frame(width: gutterWidth, alignment: .leading)
+            content()
         }
-        .padding(4)
-        .frame(width: columnWidth, alignment: .leading)
-        .background(differs ? Color.red.opacity(winner == nil ? 0.15 : 0.05) : Color.clear)
-        .cornerRadius(4)
+        .padding(.vertical, 3)
+        .background(color.opacity(0.07))
     }
 
-    private func missingPair(itemId: UUID) -> some View {
-        let item = itemBinding(itemId)
-        let resolution = item.wrappedValue.missingResolution
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(item.wrappedValue.masterClip?.vfxName ?? "").bold()
-                Text("not found in \(sourceLabel)").font(.caption2).foregroundColor(.secondary)
-                Spacer()
-                Button("Keep") { setMissingResolution(itemId: itemId, .keep) }
-                    .controlSize(.small)
-                    .liquidGlassButton(prominent: resolution == .keep)
-                Button("Mark Removed") { setMissingResolution(itemId: itemId, .markRemoved) }
-                    .controlSize(.small)
-                    .liquidGlassButton(prominent: resolution == .markRemoved)
-                    .tint(.red)
-            }
-            HStack(spacing: 0) {
-                Text("Local").font(.caption2).foregroundColor(.secondary).frame(width: 90, alignment: .leading)
-                ForEach(allColumns, id: \.self) { col in
-                    Text(item.wrappedValue.masterClip?.dict[col].flatMap { $0.isEmpty ? nil : $0 } ?? "–")
-                        .font(.caption)
-                        .strikethrough(resolution == .markRemoved)
-                        .foregroundColor(resolution == .markRemoved ? .secondary : .primary)
-                        .frame(width: columnWidth, alignment: .leading)
+    @ViewBuilder
+    private func valueCell(item: Binding<MergeItem>, key: String, side: RowSide) -> some View {
+        let differs = item.wrappedValue.diffKeys.contains(key)
+        let winner = item.wrappedValue.fieldWinners[key]
+        let value = side == .incoming
+            ? (item.wrappedValue.importedClip?.dict[key] ?? "")
+            : (item.wrappedValue.masterClip?.dict[key] ?? "")
+        let isLosing = differs && (
+            (side == .incoming && winner == .master) || (side == .master && winner == .incoming)
+        )
+
+        Text(value.isEmpty ? "–" : value)
+            .font(.caption)
+            .strikethrough(isLosing)
+            .foregroundColor(isLosing ? .secondary : .primary)
+            .padding(4)
+            .frame(width: columnWidth, alignment: .leading)
+            .background(differs && winner == nil ? Color.red.opacity(0.12) : Color.clear)
+    }
+
+    private func arrowsLine(item: Binding<MergeItem>, cols: [String]) -> some View {
+        HStack(spacing: 0) {
+            Text("").frame(width: gutterWidth, alignment: .leading)
+            ForEach(cols, id: \.self) { col in
+                let differs = item.wrappedValue.diffKeys.contains(col)
+                let winner = item.wrappedValue.fieldWinners[col]
+                Group {
+                    if differs {
+                        HStack(spacing: 6) {
+                            Button { setWinner(itemId: item.wrappedValue.id, key: col, winner: .incoming) } label: {
+                                Image(systemName: winner == .incoming ? "arrow.down.circle.fill" : "arrow.down.circle")
+                            }
+                            .help("Take Remote List value, overwrite VFX Master List")
+                            Button { setWinner(itemId: item.wrappedValue.id, key: col, winner: .master) } label: {
+                                Image(systemName: winner == .master ? "arrow.up.circle.fill" : "arrow.up.circle")
+                            }
+                            .help("Keep VFX Master List value, reject Remote List")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(winner == nil ? .red : .accentColor)
+                    } else {
+                        Color.clear.frame(height: 14)
+                    }
                 }
+                .padding(4)
+                .frame(width: columnWidth, alignment: .leading)
             }
         }
-        .padding(8)
-        .background(Color.red.opacity(resolution == nil ? 0.12 : 0.04))
-        .cornerRadius(8)
+    }
+
+    private func missingRow(item: MergeItem) -> some View {
+        let resolution = item.missingResolution
+        return HStack {
+            Text(displayName(for: item.masterClip))
+                .bold()
+                .strikethrough(resolution == .markRemoved)
+                .foregroundColor(resolution == .markRemoved ? .secondary : .primary)
+            Spacer()
+            Button("Keep") { setMissingResolution(itemId: item.id, .keep) }
+                .controlSize(.small)
+                .liquidGlassButton(prominent: resolution == .keep)
+            Button("Mark Removed") { setMissingResolution(itemId: item.id, .markRemoved) }
+                .controlSize(.small)
+                .liquidGlassButton(prominent: resolution == .markRemoved)
+                .tint(.red)
+        }
+        .padding(.vertical, 6)
     }
 
     // MARK: - Matched
 
     @ViewBuilder
     private var matchedSection: some View {
-        if !matchedItems.isEmpty {
+        if !visibleMatchedItems.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Label("\(matchedItems.count) Matched", systemImage: "checkmark.circle.fill")
-                        .font(.headline)
-                        .foregroundColor(.green)
-                    Spacer()
-                    Button(hideMatching ? "Show Matching" : "Hide Matching") { hideMatching.toggle() }
-                        .controlSize(.small)
-                }
-                if !hideMatching {
-                    VStack(spacing: 0) {
-                        ForEach(matchedItems) { item in
-                            HStack {
-                                Text(item.importedClip?.vfxName ?? "")
-                                Spacer()
-                                Text("Identical").font(.caption)
-                            }
-                            .padding(.vertical, 4)
-                            Divider()
+                Label("\(visibleMatchedItems.count) Matched", systemImage: "checkmark.circle.fill")
+                    .font(.headline)
+                    .foregroundColor(.green)
+                VStack(spacing: 0) {
+                    ForEach(visibleMatchedItems) { item in
+                        HStack {
+                            Text(displayName(for: item.importedClip))
+                            Spacer()
+                            Text("Identical").font(.caption)
                         }
+                        .padding(.vertical, 4)
+                        Divider()
                     }
-                    .foregroundColor(.secondary)
-                    .padding(8)
-                    .background(Color.green.opacity(0.08))
-                    .cornerRadius(8)
                 }
+                .foregroundColor(.secondary)
+                .padding(8)
+                .background(Color.green.opacity(0.08))
+                .cornerRadius(8)
             }
         }
     }
@@ -443,8 +531,9 @@ struct SyncReviewView: View {
             item.masterClip = masterClip
             item.fieldWinners = [:]
             item.confirmedNew = false
-            if let imp = item.importedClip {
-                item.state = MergeManager.diffKeys(master: masterClip, imported: imp).isEmpty ? .identical : .modified
+            item.ignoredKeys = ignoredDiffKeys
+            if item.importedClip != nil {
+                item.state = item.diffKeys.isEmpty ? .identical : .modified
             }
         }
         relinkTarget = nil

@@ -3,7 +3,7 @@ import Foundation
 struct CSVManager {
     
     // Default headers for Master VFX List
-    static let headers = ["ID", "VFX Name", "Original VFX Name", "TC In", "TC Out", "Source TC In", "Source TC Out", "Reel Name", "File Names", "Frame Start", "Frame End", "Duration", "Resolve Unique ID"]
+    static let headers = ["ID", "VFX Name", "Original VFX Name", "TC In", "TC Out", "Source TC In", "Source TC Out", "Reel Name", "File Names", "Frame Start", "Frame End", "Duration"]
     
     static func escape(_ string: String) -> String {
         var escaped = string

@@ -2,12 +2,40 @@
 import sys
 import json
 import os
+import subprocess
 
 try:
     import xlsxwriter
 except ImportError:
     print(json.dumps({"error": "MISSING_DEP:xlsxwriter", "message": "xlsxwriter not found. Resolver can auto-install it."}))
     sys.exit(1)
+
+# Target on-screen size for an embedded thumbnail (px) — the row/column are sized to this once,
+# and every image is scaled down (preserving aspect ratio, never upscaled) to fit inside it.
+TARGET_THUMB_WIDTH_PX = 160
+TARGET_THUMB_HEIGHT_PX = 100
+
+
+def image_pixel_size(path):
+    """Native pixel dimensions via macOS's `sips` (already relied on elsewhere in this codebase
+    for thumbnail resizing) — avoids adding an image-library dependency just to read a JPEG/PNG
+    header. Returns None if it can't be determined, so callers can fall back gracefully."""
+    try:
+        result = subprocess.run(["sips", "-g", "pixelWidth", "-g", "pixelHeight", path],
+                                 capture_output=True, text=True, check=False)
+        width = height = None
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("pixelWidth:"):
+                width = int(line.split(":", 1)[1].strip())
+            elif line.startswith("pixelHeight:"):
+                height = int(line.split(":", 1)[1].strip())
+        if width and height:
+            return width, height
+    except Exception:
+        pass
+    return None
+
 
 def export_excel(payload_path):
     try:
@@ -23,7 +51,6 @@ def export_excel(payload_path):
             return
 
         workbook = xlsxwriter.Workbook(output_path)
-        workbook.set_calc_mode('auto') # Ensure formulas (like DISPIMG) are calculated
         worksheet = workbook.add_worksheet("Indexing Run")
         
         # Formats
@@ -46,30 +73,41 @@ def export_excel(payload_path):
             worksheet.write(0, col, header, header_format)
             col_widths[col] = len(header) + 2
 
-        # Thumbnail column width and row height
+        # Thumbnail column width and row height — sized once to fit TARGET_THUMB_*_PX.
         thumb_col = -1
         if "Thumbnail" in headers:
             thumb_col = headers.index("Thumbnail")
-            col_widths[thumb_col] = 20 # Fixed width for thumbnails (approx 160px)
+            col_widths[thumb_col] = TARGET_THUMB_WIDTH_PX / 8  # ~8px per Excel column-width unit
 
         # Write Data
         for row_idx, clip in enumerate(clips, start=1):
             row_height = 20 # Default
             if thumb_col != -1:
-                row_height = 80 # Height for thumbnails
-            
+                row_height = TARGET_THUMB_HEIGHT_PX * 0.75 + 8  # px -> points, plus a little margin
+
             worksheet.set_row(row_idx, row_height)
 
             for col_idx, header in enumerate(headers):
                 if header == "Thumbnail":
                     img_path = clip.get("Thumbnail")
                     if img_path and os.path.exists(img_path):
-                        # Restoring the "better" version (Place in Cell)
-                        # We add 'description' which is reported to help with #UNKNOWN! errors on some Excel versions
-                        worksheet.embed_image(row_idx, col_idx, img_path, {
-                            'description': f'Thumbnail',
+                        # A normal floating image anchored to the cell — works in every Excel
+                        # version (2007+), LibreOffice, Numbers, and Google Sheets imports. The
+                        # newer worksheet.embed_image() ("Place in Cell") produces an Excel-365-only
+                        # rich-value/DISPIMG cell that shows as blank or #UNKNOWN! anywhere else,
+                        # which is why this didn't reliably work before.
+                        size = image_pixel_size(img_path)
+                        if size:
+                            native_w, native_h = size
+                            scale = min(TARGET_THUMB_WIDTH_PX / native_w, TARGET_THUMB_HEIGHT_PX / native_h, 1.0)
+                        else:
+                            scale = 0.3  # Couldn't read dimensions — still insert it, just conservatively sized.
+                        worksheet.insert_image(row_idx, col_idx, img_path, {
+                            'x_scale': scale,
+                            'y_scale': scale,
+                            'object_position': 1,  # move and size with the cell
+                            'description': 'Thumbnail',
                             'url': None,
-                            'tip': 'Clip Thumbnail'
                         })
                     continue
                 else:

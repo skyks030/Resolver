@@ -43,7 +43,8 @@ enum SheetSyncScriptRunner {
     /// Wraps PyScriptRunner's completion-handler API (see Resolve/Tools/sheet_sync.py) as async.
     static func run(
         action: String, provider: SheetSyncProviderKind, token: String,
-        link: String? = nil, sheetName: String? = nil, rows: [[String: String]]? = nil
+        link: String? = nil, sheetName: String? = nil, rows: [[String: String]]? = nil,
+        columnOrder: [String]? = nil
     ) async throws -> SheetSyncScriptResult {
         var payload: [String: Any] = [
             "action": action,
@@ -53,6 +54,11 @@ enum SheetSyncScriptRunner {
         if let link { payload["link"] = link }
         if let sheetName, !sheetName.isEmpty { payload["sheetName"] = sheetName }
         if let rows { payload["rows"] = rows }
+        // A Swift [String: String] row has no defined key order, so on a brand-new/empty sheet
+        // (nothing existing to anchor a header order on) the very first write needs an explicit
+        // column order to follow — otherwise new columns land in whatever arbitrary order
+        // JSONSerialization happened to produce. See sheet_sync.py's build_header.
+        if let columnOrder, !columnOrder.isEmpty { payload["columnOrder"] = columnOrder }
 
         let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
         let data = try JSONSerialization.data(withJSONObject: payload)

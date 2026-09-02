@@ -300,8 +300,7 @@ struct DropDownMenu: View {
                         frameStart: raw.frameStart,
                         frameEnd: raw.frameEnd,
                         duration: raw.duration,
-                        originalVfxName: nil,
-                        uniqueId: raw.uniqueId
+                        originalVfxName: nil
                     )
                  }
                  
@@ -335,8 +334,7 @@ struct DropDownMenu: View {
                     frameStart: raw.frameStart,
                     frameEnd: raw.frameEnd,
                     duration: raw.duration,
-                    originalVfxName: nil,
-                    uniqueId: raw.uniqueId
+                    originalVfxName: nil
                 )
             }
             
@@ -429,7 +427,6 @@ struct IncomingMarkerData: Decodable {
 struct IncomingClipData: Decodable {
     let vfxName, tcIn, tcOut, sourceTcIn, sourceTcOut, fileNames, reelName: String
     let frameStart, frameEnd, duration: Int?
-    let uniqueId: String?
 }
 
 struct WindowAccessor: NSViewRepresentable {

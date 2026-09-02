@@ -87,25 +87,28 @@ All scripts talk to Resolve through `DaVinciResolveScript`, loaded from
 - **`ClipData`** (in `ProjectManager.swift`) is the core clip record. It's backed by a single `[String: String]`
   dictionary (`dict`) rather than fixed fields, so it can carry arbitrary custom metadata columns (from CSV
   import etc.) alongside well-known keys (`VFX Name`, `TC In/Out`, `Source TC In/Out`, `Frame Start/End`,
-  `Duration`, `Reel Name`, `Resolve Unique ID`, ...). Convenience computed properties wrap `dict` lookups —
+  `Duration`, `Reel Name`, `Removed` (soft-delete flag), ...). Convenience computed properties wrap `dict` lookups —
   add new well-known fields the same way rather than introducing parallel stored properties. Its `Codable`
   implementation has a custom decoder to stay backward-compatible with older saved JSON that used discrete
   keys instead of `dict`.
 - **`MergeManager`** (`MergeManager.swift`) implements the diff/merge between the project's master `[ClipData]`
   and a freshly imported/fetched list (DaVinci Resolve index, CSV, or a linked Sheet Sync provider).
   `compareColumnAware` matches each imported clip to a master clip in two passes — first the cheap, precise
-  exact-signal tiers (Resolve Unique ID → source range → source trim → clip name, reconform-aware), then a
-  generic column-overlap scorer for whatever's left (every remaining pair scores by how many dict columns
-  agree, assigned highest-score-first) — so a shot survives a rename/retrim as long as it still shares enough
-  other columns, without a manual "force this field" override. Unmatched imports become `.new` (with
-  near-miss `candidateMasterClips` to seed manual relinking); `MergeManager.missingItems` wraps master clips
-  no import claimed as `.missing` (used only by the one-way DaVinci/CSV import flow — a shot Resolve no
-  longer has is a discrepancy, resolved either by dismissing it or flagging it `ClipData.isRemoved`, a
-  reversible soft-delete, never an actual row deletion). `applyMerge` writes each item's per-column
-  `fieldWinners` decision into the master list, skipping anything not yet `isResolved`; `quickMerge` is a
-  no-review variant for the menu-bar quick-reindex shortcut. `SyncReviewView` is the one shared review window
-  (DaVinci/CSV import and Sheet Sync's "Compare Now" both present it) for resolving matches, relinking, and
-  per-column conflicts before applying — see its own doc comment for the full model.
+  exact-signal tiers (source range → source trim → clip name, reconform-aware; there is no per-clip unique-ID
+  tier — no script generates one, and none should be added, per the user's explicit call to drop that
+  earlier attempt), then a generic column-overlap scorer for whatever's left (every remaining pair scores by
+  how many dict columns agree, assigned highest-score-first) — so a shot survives a rename/retrim as long as
+  it still shares enough other columns, without a manual "force this field" override. Unmatched imports
+  become `.new` (with near-miss `candidateMasterClips` to seed manual relinking); `MergeManager.missingItems`
+  wraps master clips no import claimed as `.missing` (used only by the one-way DaVinci/CSV import flow — a
+  shot Resolve no longer has is a discrepancy, resolved either by dismissing it or flagging it
+  `ClipData.isRemoved`, a reversible soft-delete, never an actual row deletion). `applyMerge` writes each
+  item's per-column `fieldWinners` decision into the master list, skipping anything not yet `isResolved`;
+  `quickMerge` is a no-review variant for the menu-bar quick-reindex shortcut. `SyncReviewView` is the one
+  shared review window (DaVinci/CSV import and Sheet Sync's "Compare Now" both present it) for resolving
+  matches, relinking, and per-column conflicts before applying — see its own doc comment for the full model.
+  `SheetSync/SheetSyncStore.swift` holds the program-wide list of pinned sheets (`PinnedSheet`, UserDefaults-
+  backed, independent of `Project` — survives switching projects) that `SheetSyncView` lists per provider tab.
 - **`CrashManager`** (`CrashManager.swift`) is a singleton that writes a lock file on session start
   (`Application Support/Resolver/app.lock`) and checks for it on next launch to detect unclean shutdowns,
   surfacing the most recent log via `CrashReportView`. It also owns log-file creation used by `PyScriptRunner`.

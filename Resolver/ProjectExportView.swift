@@ -7,8 +7,13 @@ struct ProjectExportView: View {
     // method/view (including the sheets presented from this window) can register undo actions
     // through it — see ProjectManager.registerUndo.
     @Environment(\.undoManager) private var undoManager
-    // Scene Filter
-    @State private var selectedScenePrefix: String? = nil
+    // Filter Manager: a per-column "contains" search, AND-combined across every column that has
+    // a value set. `isFilterActive` is the Filter button's own on/off state — filters stay
+    // configured in `columnFilters` even while switched off, so turning the button back on
+    // re-applies them without retyping anything.
+    @State private var isFilterActive: Bool = false
+    @State private var columnFilters: [String: String] = [:]
+    @State private var showFilterManager: Bool = false
     
     // UI Interactions
     @State private var customColumnWidths: [String: CGFloat] = [:]
@@ -42,6 +47,7 @@ struct ProjectExportView: View {
     @State private var showMergeReview = false
     @State private var pendingMergeItems: [MergeItem] = []
     @State private var pendingSceneMarkers: [MarkerData] = []
+    @State private var pendingIgnoredDiffKeys: Set<String> = []
     
     // Scene Manager & Generator States
     @State private var showSceneManager = false
@@ -144,12 +150,18 @@ struct ProjectExportView: View {
     
     // VFX Indexing State
     @State private var vfxTrack: String = "1"
-    @State private var vfxThumbnailTrack: String = "1"
     @State private var indexAllEpisodes: Bool = false
-    
+
+    // Thumbnails: which frame within each shot to grab, and the resize height — both remembered
+    // per-project (see Project.vfxThumbnailFramePosition/vfxThumbnailScaleHeight), loaded on
+    // appear/project switch below. No more source-track selection — thumbnails are grabbed from
+    // the timeline exactly as it currently looks (see ThumbnailImportSheet).
+    @State private var thumbnailFramePosition: ThumbnailFramePosition = .start
+    @State private var thumbnailScaleHeight: Int = 512
+
     // Settings
     @AppStorage("thumbnailFormat") private var thumbnailFormat: String = "jpg"
-    @AppStorage("thumbnailHeight") private var thumbnailHeight: Int = 512
+    @AppStorage("thumbnailHeight") private var thumbnailHeight: Int = standardThumbnailHeight
 
     var body: some View {
         VStack(spacing: 0) {
@@ -166,47 +178,66 @@ struct ProjectExportView: View {
                     
                     // Filter + Column Toolbar
                     HStack(spacing: 10) {
-                        // Unified Filter menu
-                        Menu {
-                            Section("Filter by Scene") {
-                                Button("All Scenes") { selectedScenePrefix = nil }
-                                    .disabled(selectedScenePrefix == nil)
-                                ForEach(projectManager.currentScenes) { scene in
-                                    Button {
-                                        selectedScenePrefix = (selectedScenePrefix == scene.name) ? nil : scene.name
-                                    } label: {
-                                        if selectedScenePrefix == scene.name {
-                                            Label("\(scene.name) (\(scene.startTC))", systemImage: "checkmark")
-                                        } else {
-                                            Text("\(scene.name) (\(scene.startTC))")
-                                        }
-                                    }
+                        // Filter button — the main area toggles whether the configured filters
+                        // are applied at all; the "…" opens the Filter Manager to configure them.
+                        HStack(spacing: 0) {
+                            Button {
+                                isFilterActive.toggle()
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "line.3.horizontal.decrease.circle\(isFilterActive ? ".fill" : "")")
+                                    Text("Filter")
                                 }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
                             }
-                            Section("Columns") {
-                                let customCols = availableCustomColumns
-                                if customCols.isEmpty {
-                                    Text("No custom columns").foregroundColor(.secondary)
-                                }
-                                let toggleCols = customCols.filter { !fixedColumns.contains($0) }
-                                ForEach(toggleCols, id: \.self) { col in
-                                    Toggle(col, isOn: Binding(
-                                        get: { customColumnVisibility[col] ?? true },
-                                        set: { customColumnVisibility[col] = $0 }
-                                    ))
-                                }
+                            .buttonStyle(.plain)
+                            .help(isFilterActive ? "Filters are applied — click to show the full list" : "Click to apply the filters configured in the Filter Manager")
+
+                            Divider().frame(height: 14)
+
+                            Button {
+                                showFilterManager = true
+                            } label: {
+                                Image(systemName: "ellipsis")
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 6)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Configure filters")
+                        }
+                        .background(isFilterActive ? Color.accentColor.opacity(0.18) : Color.clear)
+                        .liquidGlassPanel(cornerRadius: 8)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(isFilterActive ? Color.accentColor.opacity(0.5) : Color.secondary.opacity(0.25), lineWidth: 1)
+                        )
+                        .fixedSize()
+
+                        // Columns visibility — a separate concern from row filtering above.
+                        Menu {
+                            let customCols = availableCustomColumns
+                            if customCols.isEmpty {
+                                Text("No custom columns").foregroundColor(.secondary)
+                            }
+                            let toggleCols = customCols.filter { !fixedColumns.contains($0) }
+                            ForEach(toggleCols, id: \.self) { col in
+                                Toggle(col, isOn: Binding(
+                                    get: { customColumnVisibility[col] ?? true },
+                                    set: { customColumnVisibility[col] = $0 }
+                                ))
                             }
                         } label: {
                             HStack(spacing: 4) {
-                                Image(systemName: "line.3.horizontal.decrease.circle")
-                                Text(selectedScenePrefix != nil ? "Scene: \(selectedScenePrefix!)" : "Filter")
+                                Image(systemName: "slider.horizontal.3")
+                                Text("Columns")
                             }
                         }
                         .menuStyle(.button)
                         .liquidGlassButton(prominent: false)
                         .controlSize(.regular)
                         .fixedSize()
-                        
+
                         // Scenes button
                         Button { showSceneManager = true } label: {
                             countBadgeLabel(title: "Scenes", icon: "film.stack", count: projectManager.currentScenes.count)
@@ -223,15 +254,8 @@ struct ProjectExportView: View {
                         .controlSize(.regular)
                         .fixedSize()
 
-                        if selectedScenePrefix != nil {
-                            Button { selectedScenePrefix = nil } label: {
-                                Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        
                         Spacer()
-                        
+
                         if let filteredCount = filteredClipsCount(clips: projectManager.currentMasterList) {
                             Text("Showing \(filteredCount) / \(projectManager.currentMasterList.count) clips")
                                 .font(.caption)
@@ -453,35 +477,9 @@ struct ProjectExportView: View {
         
         // Merge Review Sheet (remains a sheet for consistency)
         .sheet(isPresented: $showMergeReview) {
-            SyncReviewView(
-                mergeItems: $pendingMergeItems,
-                allMasterClips: projectManager.currentMasterList,
-                sourceLabel: "DaVinci Resolve / CSV Import",
-                supportsPush: false,
-                pushCandidates: .constant([]),
-                onApply: {
-                    let oldList = projectManager.currentMasterList
-                    var newMaster = projectManager.currentMasterList
-                    MergeManager.applyMerge(master: &newMaster, mergeItems: pendingMergeItems)
-
-                    // Only pass markers if it was a Resolve Index (not a CSV import)
-                    if !pendingSceneMarkers.isEmpty {
-                        projectManager.updateMasterList(with: newMaster, sceneMarkers: pendingSceneMarkers)
-                    } else {
-                        projectManager.updateMasterList(with: newMaster)
-                    }
-                    projectManager.registerUndo(\.currentMasterList, actionName: "Import Merge", from: oldList) {
-                        self.projectManager.saveMasterList()
-                    }
-
-                    showMergeReview = false
-                },
-                onCancel: {
-                    showMergeReview = false
-                }
-            )
+            mergeReviewSheet
         }
-        
+
         // DaVinci Import Sheet
         .sheet(isPresented: $showDaVinciImport) {
             DaVinciImportSheet(vfxTrack: $vfxTrack, indexAllEpisodes: $indexAllEpisodes, episodesCount: projectManager.currentEpisodes.count) {
@@ -497,7 +495,8 @@ struct ProjectExportView: View {
         // Thumbnail Import Sheet
         .sheet(isPresented: $showThumbnailImport) {
             ThumbnailImportSheet(
-                vfxThumbnailTrack: $vfxThumbnailTrack,
+                framePosition: $thumbnailFramePosition,
+                scaleHeight: $thumbnailScaleHeight,
                 allShots: $thumbnailsAllShots,
                 selectedShotCount: selectedThumbnailClipIds.count,
                 hasExistingThumbnails: hasThumbnailsCache,
@@ -509,7 +508,8 @@ struct ProjectExportView: View {
                     DaVinciChecker.performPreflightCheck { diag in
                         if let diag = diag, diag.success {
                             if let project = projectManager.currentProject {
-                                projectManager.updateVfxThumbnailTrack(projectId: project.id, track: vfxThumbnailTrack)
+                                projectManager.updateVfxThumbnailFramePosition(projectId: project.id, position: thumbnailFramePosition.rawValue)
+                                projectManager.updateVfxThumbnailScale(projectId: project.id, height: thumbnailScaleHeight)
                                 generateThumbnails(project: project)
                             }
                         } else {
@@ -560,11 +560,17 @@ struct ProjectExportView: View {
         .sheet(isPresented: $showVfxNameGenerator) {
             VfxNameGeneratorView(project: projectManager.currentProject!)
         }
+
+        // Filter Manager
+        .sheet(isPresented: $showFilterManager) {
+            FilterManagerSheet(columns: activeColumns, filters: $columnFilters, isActive: $isFilterActive)
+        }
         
         .onAppear {
             if let project = projectManager.currentProject {
                 vfxTrack = project.vfxTrackIndex ?? "1"
-                vfxThumbnailTrack = project.vfxThumbnailTrackIndex ?? "1"
+                thumbnailFramePosition = ThumbnailFramePosition(rawValue: project.vfxThumbnailFramePosition ?? "") ?? .start
+                thumbnailScaleHeight = project.vfxThumbnailScaleHeight ?? thumbnailHeight
                 hasThumbnailsCache = hasThumbnails()
             }
             projectManager.undoManager = undoManager
@@ -572,8 +578,13 @@ struct ProjectExportView: View {
         .onChange(of: projectManager.currentProject?.id) { _ in
             if let project = projectManager.currentProject {
                 vfxTrack = project.vfxTrackIndex ?? "1"
-                vfxThumbnailTrack = project.vfxThumbnailTrackIndex ?? "1"
-                selectedScenePrefix = nil
+                thumbnailFramePosition = ThumbnailFramePosition(rawValue: project.vfxThumbnailFramePosition ?? "") ?? .start
+                thumbnailScaleHeight = project.vfxThumbnailScaleHeight ?? thumbnailHeight
+                // Column filters reference this project's own column names — clear them rather
+                // than risk silently hiding everything in a different project that doesn't have
+                // the same custom columns.
+                isFilterActive = false
+                columnFilters = [:]
                 hasThumbnailsCache = hasThumbnails()
             }
         }
@@ -830,7 +841,7 @@ struct ProjectExportView: View {
                     // Save renaming overrides implicitly simply by existing dict mutations
                     var updates: [String: String] = [:]
                     for clip in projectManager.currentMasterList {
-                        if let key = clip.uniqueId ?? clip.originalVfxName {
+                        if let key = clip.originalVfxName {
                             if clip.vfxName != clip.originalVfxName {
                                 updates[key] = clip.vfxName
                             }
@@ -1319,13 +1330,16 @@ struct ProjectExportView: View {
             }
         }
         
-        if let prefix = selectedScenePrefix {
-            indices = indices.filter { i in
-                let name = clips[i].vfxName
-                return name.hasPrefix(prefix + "_") || name == prefix
+        if isFilterActive {
+            for (col, needle) in columnFilters {
+                let trimmed = needle.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { continue }
+                indices = indices.filter { i in
+                    (clips[i].dict[col] ?? "").localizedCaseInsensitiveContains(trimmed)
+                }
             }
         }
-        
+
         if let sortCol = sortColumn {
             indices.sort { a, b in
                 let valA = clips[a].dict[sortCol] ?? ""
@@ -1371,7 +1385,7 @@ struct ProjectExportView: View {
     }
     
     private func filteredClipsCount(clips: [ClipData]) -> Int? {
-        guard selectedScenePrefix != nil else { return nil }
+        guard isFilterActive else { return nil }
         return getFilteredIndices(clips: clips).count
     }
     
@@ -1396,6 +1410,16 @@ struct ProjectExportView: View {
         let scenesEnabled = !projectManager.currentScenes.isEmpty
         let recTcInIdx = originalHeader.firstIndex(of: "Rec TC In")
 
+        // clip-indexing.py's raw column names don't all match ClipData's well-known dict keys —
+        // this used to get fixed up by CSVImportView's own header auto-map on the way through the
+        // (now-skipped, see startMergeReview) CSV Import Manager window. Doing it here instead
+        // keeps every DaVinci-indexed clip's TC In/Out and File Names actually populated.
+        let headerRenames: [String: String] = [
+            "Rec TC In": "TC In",
+            "Rec TC Out": "TC Out",
+            "File Name": "File Names",
+        ]
+
         // Rebuild each row as a [columnName: value] dict against the original
         // header, adding "Scene" where applicable. Rebuilding from a dict avoids
         // fragile manual index bookkeeping when the column order changes below.
@@ -1403,7 +1427,7 @@ struct ProjectExportView: View {
         for row in rawRows.dropFirst() {
             var dict: [String: String] = [:]
             for (i, colName) in originalHeader.enumerated() {
-                dict[colName] = i < row.count ? row[i] : ""
+                dict[headerRenames[colName] ?? colName] = i < row.count ? row[i] : ""
             }
             let tc = recTcInIdx.map { $0 < row.count ? row[$0] : "" } ?? ""
             if scenesEnabled {
@@ -1421,7 +1445,7 @@ struct ProjectExportView: View {
             dataDicts.append(dict)
         }
 
-        var newHeader = originalHeader.filter { $0 != "Episode" && $0 != "Scene" }
+        var newHeader = originalHeader.map { headerRenames[$0] ?? $0 }.filter { $0 != "Episode" && $0 != "Scene" }
         guard let clipNameIdx = newHeader.firstIndex(of: "Clip Name") else { return rawCSV }
         var insertAt = clipNameIdx + 1
         if episodesEnabled {
@@ -1452,12 +1476,58 @@ struct ProjectExportView: View {
         }
     }
 
-    private func startMergeReview(importedClips: [ClipData], markers: [MarkerData]) {
+    // Pulled out of `body` — inlined, one more argument here was enough to push the main view's
+    // modifier chain past the type checker's inference budget ("unable to type-check this
+    // expression in reasonable time").
+    @ViewBuilder
+    private var mergeReviewSheet: some View {
+        SyncReviewView(
+            mergeItems: $pendingMergeItems,
+            allMasterClips: projectManager.currentMasterList,
+            sourceLabel: "DaVinci Resolve / CSV Import",
+            supportsPush: false,
+            pushCandidates: .constant([]),
+            ignoredDiffKeys: pendingIgnoredDiffKeys,
+            onApply: {
+                let oldList = projectManager.currentMasterList
+                var newMaster = projectManager.currentMasterList
+                MergeManager.applyMerge(master: &newMaster, mergeItems: pendingMergeItems)
+
+                // Only pass markers if it was a Resolve Index (not a CSV import)
+                if !pendingSceneMarkers.isEmpty {
+                    projectManager.updateMasterList(with: newMaster, sceneMarkers: pendingSceneMarkers)
+                } else {
+                    projectManager.updateMasterList(with: newMaster)
+                }
+                projectManager.registerUndo(\.currentMasterList, actionName: "Import Merge", from: oldList) {
+                    self.projectManager.saveMasterList()
+                }
+
+                showMergeReview = false
+            },
+            onCancel: {
+                showMergeReview = false
+            }
+        )
+    }
+
+    private func startMergeReview(importedClips: [ClipData], markers: [MarkerData], isFromDaVinciIndex: Bool = false) {
         guard let project = projectManager.currentProject else { return }
         let preprocessed = projectManager.prepareImportedClips(importedClips, projectId: project.id)
 
+        // DaVinci Resolve has no concept of a VFX Name — it's assigned entirely inside Resolver
+        // (VFX Name Generator / manual rename), never something an index can read back. Without
+        // this, every single indexed shot would show a bogus "VFX Name" conflict against its real
+        // master-list name. A hand-picked CSV import keeps full diffing — it may genuinely carry
+        // a real VFX Name column (e.g. a previously-exported master list). "Thumbnail Updated" is
+        // the same story — a purely local, Resolver-generated field an index can never carry, so
+        // it'd otherwise show a bogus conflict on every already-thumbnailed shot. Sheet Sync
+        // deliberately does NOT ignore either — comparing a synced sheet's real values is the
+        // whole point there.
+        let ignoredKeys: Set<String> = isFromDaVinciIndex ? ["VFX Name", "Original VFX Name", "Thumbnail Updated"] : []
+
         let master = projectManager.currentMasterList
-        var items = MergeManager.compareColumnAware(master: master, imported: preprocessed)
+        var items = MergeManager.compareColumnAware(master: master, imported: preprocessed, ignoredDiffKeys: ignoredKeys)
         // DaVinci/CSV import is a one-way read of "what currently exists" — a master shot this
         // import doesn't see at all is a discrepancy too (it may have been deleted in Resolve),
         // not something to silently leave untouched.
@@ -1465,6 +1535,7 @@ struct ProjectExportView: View {
 
         self.pendingMergeItems = items
         self.pendingSceneMarkers = markers
+        self.pendingIgnoredDiffKeys = ignoredKeys
         self.showMergeReview = true
     }
     
@@ -1561,16 +1632,18 @@ struct ProjectExportView: View {
                 }
 
                 ConsoleLogger.shared.log("✅ Indexing finished, \(max(output.components(separatedBy: "\n").count - 1, 0)) row(s) received.")
-                // Write CSV output to a temporary file
+                // Write CSV output to a temporary file, then feed it straight into the Sync
+                // Review — this is Resolver's own generated CSV with a known, fixed column set,
+                // not an arbitrary user file, so the CSV Import Manager's column-mapping step
+                // (needed for a hand-picked CSV, where headers can be anything) would just be an
+                // extra click for no benefit here.
                 do {
                     let augmented = self.augmentIndexingCSV(output)
                     let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent("davinci_import.csv")
                     try augmented.write(to: tmpURL, atomically: true, encoding: .utf8)
 
-                    // Launch CSV Import Window
-                    CSVImportView.showStandalone(url: tmpURL) { importedClips in
-                        self.startMergeReview(importedClips: importedClips, markers: [])
-                    }
+                    let importedClips = try CSVManager.read(from: tmpURL)
+                    self.startMergeReview(importedClips: importedClips, markers: [], isFromDaVinciIndex: true)
                 } catch {
                     ConsoleLogger.shared.log("❌ Failed to process indexing data: \(error)")
                     self.indexingErrorMessage = "Failed to process indexing data: \(error.localizedDescription)"
@@ -1747,20 +1820,24 @@ struct ProjectExportView: View {
 
         try? FileManager.default.createDirectory(at: thumbnailsDir, withIntermediateDirectories: true)
 
-        let targetTrack = Int(self.vfxThumbnailTrack) ?? 1
         let clipsData = clips.map { clip -> [String: String] in
             let episode = resolveTargetEpisode(for: clip.tcIn, explicitEpisodeTag: clip.dict["Episode"])
             return [
                 "name": clip.vfxName,
-                "tc": clip.tcIn,
-                "frameStart": String(clip.frameStart ?? 0),
-                "frameEnd": String(clip.frameEnd ?? 0),
+                "tcIn": clip.tcIn,
+                "tcOut": clip.tcOut,
                 "timelineUniqueId": episode?.timelineUniqueId ?? "",
                 "timelineName": episode?.timelineName ?? ""
             ]
         }
 
-        let payload: [String: Any] = ["outputDir": thumbnailsDir.path, "targetTrack": targetTrack, "clips": clipsData, "format": thumbnailFormat, "resizeHeight": thumbnailHeight]
+        let payload: [String: Any] = [
+            "outputDir": thumbnailsDir.path,
+            "framePosition": thumbnailFramePosition.rawValue,
+            "clips": clipsData,
+            "format": thumbnailFormat,
+            "resizeHeight": thumbnailScaleHeight,
+        ]
         do {
             let data = try JSONSerialization.data(withJSONObject: payload)
             let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent("resolver_thumbnails.json")
@@ -1791,6 +1868,7 @@ struct ProjectExportView: View {
                     ConsoleLogger.shared.log("✅ Thumbnail generation finished: \(line)")
                     self.thumbnailRefreshID = UUID()
                     self.hasThumbnailsCache = true
+                    self.stampThumbnailTimestamps(for: clips, project: project)
                 }
             }
         } catch {
@@ -1804,8 +1882,18 @@ struct ProjectExportView: View {
         guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
         let projectThumbnailsDir = appSupport.appendingPathComponent("com.skyks030.Resolver").appendingPathComponent("Thumbnails").appendingPathComponent(project.id.uuidString)
         try? FileManager.default.removeItem(at: projectThumbnailsDir)
-        DispatchQueue.main.async { 
-            self.thumbnailRefreshID = UUID() 
+
+        // The files are gone — clear the now-stale "when was this last updated" stamps too,
+        // rather than leave a claim on record for a thumbnail that no longer exists.
+        var changed = false
+        for idx in projectManager.currentMasterList.indices where !projectManager.currentMasterList[idx].thumbnailUpdatedAt.isEmpty {
+            projectManager.currentMasterList[idx].thumbnailUpdatedAt = ""
+            changed = true
+        }
+        if changed { projectManager.saveMasterList() }
+
+        DispatchQueue.main.async {
+            self.thumbnailRefreshID = UUID()
             self.hasThumbnailsCache = false
         }
     }
@@ -1825,11 +1913,46 @@ struct ProjectExportView: View {
     private func getThumbnailURL(project: Project, clip: ClipData) -> URL? {
         guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
         let dirURL = appSupport.appendingPathComponent("com.skyks030.Resolver").appendingPathComponent("Thumbnails").appendingPathComponent(project.id.uuidString)
-            
+
         do {
-            let files = try FileManager.default.contentsOfDirectory(at: dirURL, includingPropertiesForKeys: nil)
-            return files.first(where: { $0.lastPathComponent.contains(clip.vfxName) })
+            let files = try FileManager.default.contentsOfDirectory(at: dirURL, includingPropertiesForKeys: [.contentModificationDateKey])
+            // Exact match against the old `name.ext` scheme, or a `name_` prefix against the
+            // current timestamped one — never a bare substring match, so a shot whose name is a
+            // prefix of another's (e.g. "SH010" vs "SH010A") can't pick up its neighbor's file.
+            let name = clip.vfxName
+            let matches = files.filter { url in
+                let base = url.deletingPathExtension().lastPathComponent
+                return base == name || base.hasPrefix(name + "_")
+            }
+            // generate-thumbnails.py cleans up a clip's older files on regenerate, so this is
+            // normally just one file — picking the newest is a defensive fallback, not the
+            // common case.
+            return matches.max { thumbnailModificationDate($0) < thumbnailModificationDate($1) }
         } catch { return nil }
+    }
+
+    private func thumbnailModificationDate(_ url: URL) -> Date {
+        (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate ?? nil) ?? .distantPast
+    }
+
+    /// After a (re)generation run, records when each requested clip's thumbnail file was
+    /// actually written — read back from the file itself (not just "we asked for it"), so a shot
+    /// whose grab silently failed doesn't get a false "just updated" stamp. This is a plain text
+    /// column like any other (`ClipData.thumbnailUpdatedAt`), so it flows straight into the
+    /// existing Sheet Sync / Sync Review diff machinery with no special-casing needed there.
+    private func stampThumbnailTimestamps(for clips: [ClipData], project: Project) {
+        let formatter = ISO8601DateFormatter()
+        var changed = false
+        for clip in clips {
+            guard let idx = projectManager.currentMasterList.firstIndex(where: { $0.id == clip.id }),
+                  let url = getThumbnailURL(project: project, clip: clip) else { continue }
+            let stamp = formatter.string(from: thumbnailModificationDate(url))
+            if projectManager.currentMasterList[idx].thumbnailUpdatedAt != stamp {
+                projectManager.currentMasterList[idx].thumbnailUpdatedAt = stamp
+                changed = true
+            }
+        }
+        if changed { projectManager.saveMasterList() }
     }
 
     private func exportCSV(project: Project) {
@@ -1858,8 +1981,10 @@ struct ProjectExportView: View {
             isProcessing = true
             loadingMessage = "Generating Excel File..."
             
+            // Exactly the columns currently shown in the master list table, in that same order —
+            // activeColumns alone ignores per-column show/hide (customColumnVisibility).
             var headers = ["Thumbnail"]
-            headers.append(contentsOf: activeColumns)
+            headers.append(contentsOf: activeColumns.filter { customColumnVisibility[$0] ?? true })
             
             var clipsData = [[String: String]]()
             for clip in projectManager.currentMasterList {
