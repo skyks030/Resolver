@@ -390,8 +390,13 @@ struct VfxNameGeneratorView: View {
         ConsoleLogger.shared.log("Starting VFX Name Generation...")
 
         let oldMasterList = projectManager.currentMasterList
-        var sceneCounters: [String: Int] = [:]
-        var flatCounter = counterStart
+        // One counter per distinct grouping actually active in the schema — resets to
+        // `counterStart` whenever the episode and/or scene changes, for whichever of the two
+        // are enabled. With neither enabled, every clip shares the same ("") key, i.e. the old
+        // flat/global counter. Previously only the "both enabled" and "scene only" cases reset
+        // correctly — "episode only" (no Scene component in the schema) fell through to a single
+        // counter shared across every episode instead of restarting at each one.
+        var counters: [String: Int] = [:]
         var generated = 0
 
         // Ensure clips are sorted chronologically by their Record TC In
@@ -415,31 +420,27 @@ struct VfxNameGeneratorView: View {
                 }
             }
 
+            var sceneName: String? = nil
             if effectiveIncludeSceneNum {
-                // Scene-grouped mode: each registered scene keeps its own counter.
-                // Keyed per-episode too, so identically-named scenes in different
-                // episodes don't share a shot counter.
-                guard let sceneName = getScene(for: tc) else {
+                guard let matched = getScene(for: tc) else {
                     ConsoleLogger.shared.log("WARNING: Clip [\(tc)] did not match any registered Scene. Skipping.")
                     continue
                 }
-                let counterKey = episodeNumber.map { "\($0)|\(sceneName)" } ?? sceneName
-                let currentCount = sceneCounters[counterKey] ?? counterStart
-                let newName = buildName(episodeNumber: episodeNumber, sceneName: sceneName, counter: currentCount)
-
-                ConsoleLogger.shared.log("Clip [\(tc)] in Scene \(sceneName) -> Assigning VFX Name: \(newName)")
-                projectManager.currentMasterList[i].vfxName = newName
-                sceneCounters[counterKey] = currentCount + counterStep
-                generated += 1
-            } else {
-                // No scenes registered/enabled: fall back to one flat sequential counter.
-                let newName = buildName(episodeNumber: episodeNumber, sceneName: "", counter: flatCounter)
-
-                ConsoleLogger.shared.log("Clip [\(tc)] -> Assigning VFX Name: \(newName)")
-                projectManager.currentMasterList[i].vfxName = newName
-                flatCounter += counterStep
-                generated += 1
+                sceneName = matched
             }
+
+            var counterKey = ""
+            if effectiveIncludeEpisodeNum { counterKey += "E:\(episodeNumber.map(String.init) ?? "none")" }
+            if effectiveIncludeSceneNum { counterKey += "|S:\(sceneName ?? "")" }
+
+            let currentCount = counters[counterKey] ?? counterStart
+            let newName = buildName(episodeNumber: episodeNumber, sceneName: sceneName ?? "", counter: currentCount)
+
+            let sceneLog = sceneName.map { " in Scene \($0)" } ?? ""
+            ConsoleLogger.shared.log("Clip [\(tc)]\(sceneLog) -> Assigning VFX Name: \(newName)")
+            projectManager.currentMasterList[i].vfxName = newName
+            counters[counterKey] = currentCount + counterStep
+            generated += 1
         }
 
         if generated > 0 {
