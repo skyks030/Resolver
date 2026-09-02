@@ -43,6 +43,10 @@ struct ResolverApp: App {
         Window("Marker Manager", id: "marker-tool") {
             MarkerToolView()
         }
+
+        Window("Color Group Manager", id: "color-group-manager") {
+            ColorGroupManagerView()
+        }
         
         Window("Processing", id: "loading") {
             LoadingOverlay(message: "Processing...")

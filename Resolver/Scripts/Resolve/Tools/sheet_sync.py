@@ -277,15 +277,29 @@ def ms_write(link, sheet_name, rows, token, column_order=None):
     def range_url(address):
         return f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}/workbook/worksheets('{encoded_sheet}')/range(address='{address}')"
 
+    # Each planned write is its own Graph call, so each one completing is a genuine step —
+    # report it as it happens (Resolver's SyncReviewView shows this as a counting status bar)
+    # rather than only after everything's done.
+    total_writes = (1 if plan["header"] is not None else 0) + len(plan["updates"]) + (1 if plan["appended"] else 0)
+    done = 0
+
+    def report():
+        nonlocal done
+        done += 1
+        print(f"PROGRESS: {done}/{total_writes}")
+        sys.stdout.flush()
+
     if plan["header"] is not None:
         address = f"A1:{col_letter(len(plan['header']))}1"
         grid = [plan["header"]]
         http_json("PATCH", range_url(address), token, body={"values": grid, "numberFormat": text_number_format(grid)})
+        report()
 
     for row_number, values in plan["updates"]:
         address = f"A{row_number}:{col_letter(len(values))}{row_number}"
         grid = [values]
         http_json("PATCH", range_url(address), token, body={"values": grid, "numberFormat": text_number_format(grid)})
+        report()
 
     if plan["appended"]:
         start = plan["append_start_row"]
@@ -293,6 +307,7 @@ def ms_write(link, sheet_name, rows, token, column_order=None):
         width = max(len(r) for r in plan["appended"])
         address = f"A{start}:{col_letter(width)}{end}"
         http_json("PATCH", range_url(address), token, body={"values": plan["appended"], "numberFormat": text_number_format(plan["appended"])})
+        report()
 
     log(f"Wrote {len(plan['updates'])} updated + {len(plan['appended'])} new row(s) to '{sheet_name}'"
         f"{' (header widened)' if plan['header'] is not None else ''}.")
@@ -359,9 +374,15 @@ def google_write(link, sheet_name, rows, token, column_order=None):
     if data:
         # One batched request for everything — Sheets' API (unlike Graph's per-range PATCH)
         # supports multiple discontiguous ranges in a single call, and each entry's range only
-        # needs a starting cell — the values array's own shape determines its extent.
+        # needs a starting cell — the values array's own shape determines its extent. There's only
+        # ever one real network step here, so progress is coarse (0/1 → 1/1) rather than per-row —
+        # still enough for Resolver's status bar to show something is actively happening.
+        print("PROGRESS: 0/1")
+        sys.stdout.flush()
         batch_url = f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values:batchUpdate"
         http_json("POST", batch_url, token, body={"valueInputOption": "RAW", "data": data})
+        print("PROGRESS: 1/1")
+        sys.stdout.flush()
 
     log(f"Wrote {len(plan['updates'])} updated + {len(plan['appended'])} new row(s) to '{sheet_name}'"
         f"{' (header widened)' if plan['header'] is not None else ''}.")

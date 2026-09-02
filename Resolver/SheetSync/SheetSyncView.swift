@@ -23,6 +23,8 @@ struct SheetSyncView: View {
 
     @State private var showReview = false
     @State private var reviewMergeItems: [MergeItem] = []
+    @State private var reviewWindowSize: CGSize = CGSize(width: 1200, height: 800)
+    @State private var reviewApplyProgress: SyncApplyProgress? = nil
     // Which pinned sheet Compare Now was last pressed for — drives both the review sheet's
     // labeling and, on Apply, which sheet gets written back to.
     @State private var activeSheetId: UUID? = nil
@@ -104,10 +106,9 @@ struct SheetSyncView: View {
                 allMasterClips: projectManager.currentMasterList,
                 sourceLabel: activeSheet.map { "\(kind(of: $0).displayName) — \($0.title.isEmpty ? "Untitled Sheet" : $0.title)" } ?? selectedProvider.displayName,
                 supportsPush: true,
-                onApply: {
-                    showReview = false
-                    applySync()
-                },
+                preferredSize: reviewWindowSize,
+                applyProgress: $reviewApplyProgress,
+                onApply: { applySync() },
                 onCancel: { showReview = false }
             )
         }
@@ -285,6 +286,7 @@ struct SheetSyncView: View {
                 isBusy = false
                 statusMessage = ""
                 ConsoleLogger.shared.log("✅ Sheet Sync: fetched \(result.rows.count) row(s) from '\(result.sheetName)', \(items.filter { $0.state == .new }.count) new, \(items.filter { $0.state == .modified }.count) modified, \(missing.count) local-only")
+                reviewWindowSize = SyncReviewView.currentReferenceWindowSize()
                 showReview = true
             } catch {
                 isBusy = false
@@ -298,50 +300,67 @@ struct SheetSyncView: View {
     // MARK: - Apply
 
     private func applySync() {
-        guard let sheet = activeSheet, let providerKind = SheetSyncProviderKind(rawValue: sheet.provider) else { return }
-
-        // Pull: apply every resolved field decision into the master list — MergeManager.applyMerge
-        // takes the incoming value for any field the review resolved that way, and keeps the local
-        // value otherwise.
-        let oldList = projectManager.currentMasterList
-        var newMaster = projectManager.currentMasterList
-        MergeManager.applyMerge(master: &newMaster, mergeItems: reviewMergeItems)
-        if newMaster != oldList {
-            projectManager.updateMasterList(with: newMaster)
-            projectManager.registerUndo(\.currentMasterList, actionName: "Sheet Sync", from: oldList) {
-                self.projectManager.saveMasterList()
-            }
+        guard let sheet = activeSheet, let providerKind = SheetSyncProviderKind(rawValue: sheet.provider) else {
+            showReview = false
+            return
         }
 
-        // Push: local-only shots resolved as "Push" (missingRow's Sheet Sync framing of `.keep`),
-        // plus any resolved conflict where at least one field kept the local value — that field
-        // needs writing back out to the sheet so it converges to the same merged row Resolver now
-        // has (per-field, not whole-row-only).
-        var rowsToPush: [[String: String]] = []
-        for item in reviewMergeItems where item.state == .missing && item.missingResolution == .keep {
-            guard let masterClip = item.masterClip,
-                  let current = newMaster.first(where: { $0.id == masterClip.id }) else { continue }
-            rowsToPush.append(sheetRow(for: current))
-        }
-        for item in reviewMergeItems where item.state == .modified {
-            guard item.fieldWinners.values.contains(.master), let masterClip = item.masterClip,
-                  let merged = newMaster.first(where: { $0.id == masterClip.id }) else { continue }
-            rowsToPush.append(sheetRow(for: merged))
-        }
-
-        guard !rowsToPush.isEmpty else { return }
-        isBusy = true
-        statusMessage = "Writing \(rowsToPush.count) row(s) to \(providerKind.displayName)…"
-        ConsoleLogger.shared.log("▶️ Sheet Sync: pushing \(rowsToPush.count) row(s) to \(providerKind.rawValue)")
-
+        // The review window stays open (showing this progress in place of its footer buttons)
+        // until both phases below are actually done, rather than closing immediately and leaving
+        // the write to happen invisibly behind it.
         Task {
+            // Pull: apply every resolved field decision into the master list — MergeManager.applyMerge
+            // takes the incoming value for any field the review resolved that way, and keeps the local
+            // value otherwise.
+            let oldList = projectManager.currentMasterList
+            var newMaster = projectManager.currentMasterList
+            reviewApplyProgress = SyncApplyProgress(current: 0, total: reviewMergeItems.count, label: "Applying to VFX Master List…")
+            await MergeManager.applyMergeWithProgress(master: &newMaster, mergeItems: reviewMergeItems) { current, total in
+                reviewApplyProgress = SyncApplyProgress(current: current, total: total, label: "Applying to VFX Master List…")
+            }
+            if newMaster != oldList {
+                projectManager.updateMasterList(with: newMaster)
+                projectManager.registerUndo(\.currentMasterList, actionName: "Sheet Sync", from: oldList) {
+                    self.projectManager.saveMasterList()
+                }
+            }
+
+            // Push: local-only shots resolved as "Push" (missingRow's Sheet Sync framing of `.keep`),
+            // plus any resolved conflict where at least one field kept the local value — that field
+            // needs writing back out to the sheet so it converges to the same merged row Resolver now
+            // has (per-field, not whole-row-only).
+            var rowsToPush: [[String: String]] = []
+            for item in reviewMergeItems where item.state == .missing && item.missingResolution == .keep {
+                guard let masterClip = item.masterClip,
+                      let current = newMaster.first(where: { $0.id == masterClip.id }) else { continue }
+                rowsToPush.append(sheetRow(for: current))
+            }
+            for item in reviewMergeItems where item.state == .modified {
+                guard item.fieldWinners.values.contains(.master), let masterClip = item.masterClip,
+                      let merged = newMaster.first(where: { $0.id == masterClip.id }) else { continue }
+                rowsToPush.append(sheetRow(for: merged))
+            }
+
+            guard !rowsToPush.isEmpty else {
+                reviewApplyProgress = nil
+                showReview = false
+                return
+            }
+
+            reviewApplyProgress = SyncApplyProgress(current: 0, total: rowsToPush.count, label: "Writing to \(providerKind.displayName)…")
+            isBusy = true
+            statusMessage = "Writing \(rowsToPush.count) row(s) to \(providerKind.displayName)…"
+            ConsoleLogger.shared.log("▶️ Sheet Sync: pushing \(rowsToPush.count) row(s) to \(providerKind.rawValue)")
+
             do {
                 let token = try await SheetSyncScriptRunner.validToken(for: providerKind)
                 let sheetName = sheet.title.isEmpty ? sheet.sheetName : sheet.title
                 // Only matters the first time a brand-new/empty sheet gets written to — see
                 // sheet_sync.py's build_header — but always safe to pass.
                 let columnOrder = MergeManager.orderedColumns(for: projectManager.currentMasterList)
-                _ = try await SheetSyncScriptRunner.run(action: "write", provider: providerKind, token: token, link: sheet.link, sheetName: sheetName, rows: rowsToPush, columnOrder: columnOrder)
+                _ = try await SheetSyncScriptRunner.run(action: "write", provider: providerKind, token: token, link: sheet.link, sheetName: sheetName, rows: rowsToPush, columnOrder: columnOrder) { current, total in
+                    reviewApplyProgress = SyncApplyProgress(current: current, total: total, label: "Writing to \(providerKind.displayName)…")
+                }
                 isBusy = false
                 statusMessage = "Sync complete."
                 ConsoleLogger.shared.log("✅ Sheet Sync: push complete")
@@ -351,6 +370,8 @@ struct SheetSyncView: View {
                 errorMessage = error.localizedDescription
                 showError = true
             }
+            reviewApplyProgress = nil
+            showReview = false
         }
     }
 

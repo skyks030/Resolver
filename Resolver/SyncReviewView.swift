@@ -1,12 +1,25 @@
 import SwiftUI
 
+/// Live status for the "Resync" apply step, shown as a status bar in place of the footer's
+/// buttons while it's non-nil — see SyncReviewView.applyStatusBar. The presenting view (import
+/// or Sheet Sync) owns and drives this via the `applyProgress` binding as it actually writes
+/// changes into the master list and, for Sheet Sync, out to the remote sheet.
+struct SyncApplyProgress: Equatable {
+    var current: Int
+    var total: Int
+    var label: String
+}
+
 // Shared review window for both the DaVinci Resolve/CSV import merge and Sheet Sync's "Compare
 // Now" — same layout, same matching model (MergeManager.compareColumnAware), so switching
-// between the two feels like the same tool: every shot found is listed together (whether it
-// matched perfectly, still has a discrepancy, or couldn't be paired at all), anything the matcher
-// couldn't confidently pair floats in a "Needs a Match" pool — split by which side it came
-// from — for manual relinking or an explicit new/removed declaration, and every remaining
-// per-column discrepancy is resolved one direction or the other before Resync unlocks.
+// between the two feels like the same tool. The main list is always the full VFX Master List,
+// sorted by VFX Name (see `masterOrderedItems`) — every master shot appears there whether the
+// matcher paired it with something or not, headed by its VFX Master List name either way, so an
+// unmatched master shot still sits at its normal alphabetical spot instead of floating off
+// somewhere else. Only an unmatched *remote/imported* shot (nothing to head it by yet) floats in
+// its own "Needs a Match" pool up top, for manual relinking or declaring it a brand-new shot.
+// Every remaining per-column discrepancy is resolved one direction or the other before Resync
+// unlocks.
 struct SyncReviewView: View {
     @Binding var mergeItems: [MergeItem]
     let allMasterClips: [ClipData]
@@ -19,6 +32,20 @@ struct SyncReviewView: View {
     /// Resolve import, which never carries one at all. Defaults to none (Sheet Sync's call site
     /// doesn't pass this — a spreadsheet can legitimately carry a real VFX Name).
     var ignoredDiffKeys: Set<String> = []
+    /// The presenting window's size, captured right before this sheet was opened — this window
+    /// sizes itself relative to it (see `reviewWindowSize`) rather than to its own content, which
+    /// on a long list/many columns could otherwise balloon far past the rest of the app, most
+    /// visibly on a 4K display where the point-size gap is largest.
+    var preferredSize: CGSize = SyncReviewView.currentReferenceWindowSize()
+    /// Non-nil while Resync is actively writing changes out (to the master list, and for Sheet
+    /// Sync, to the remote sheet too) — see `SyncApplyProgress`.
+    @Binding var applyProgress: SyncApplyProgress?
+    /// When set, every shot name shown in this review becomes clickable, jumping DaVinci Resolve's
+    /// playhead to that shot's saved timecode/episode. Only wired up for a real DaVinci Resolve
+    /// index review (ProjectExportView.jumpToClipInResolve) — a hand-picked CSV import may be old
+    /// or from a different project, and Sheet Sync's review can reasonably be used with Resolve
+    /// not even running, so both leave this nil (no click affordance shown at all).
+    var onJumpToClip: ((ClipData) -> Void)? = nil
     let onApply: () -> Void
     let onCancel: () -> Void
 
@@ -28,7 +55,7 @@ struct SyncReviewView: View {
     // the list progressively narrow down to only what still needs attention.
     @State private var hideResolved = false
     @State private var relinkTarget: UUID? = nil
-    // Which "Needs a Match — VFX Master List" row's Link… button was pressed, to link it to an
+    // Which unmatched master shot's (missingRow) Link… button was pressed, to link it to an
     // unmatched *remote* item instead (the mirror of `relinkTarget`, which links an unmatched
     // remote item to a master clip).
     @State private var relinkMasterTarget: UUID? = nil
@@ -63,14 +90,37 @@ struct SyncReviewView: View {
     private var unresolvedConflictItems: [MergeItem] { mergeItems.filter { $0.state == .modified && !$0.isResolved } }
     private var resolvedCompareItems: [MergeItem] { comparedItems.filter(\.isResolved) }
 
+    /// Sort key for `masterOrderedItems`: the master clip's VFX Name — this review's heading for
+    /// a shot is always the VFX Master List's own name for it (see `clipNameText`), so the list
+    /// sorts by that same name too. Falls back to `displayName` on the rare chance a master clip
+    /// has no VFX Name at all.
+    private func masterSortKey(_ item: MergeItem) -> String {
+        let name = item.masterClip?.vfxName ?? ""
+        return name.isEmpty ? displayName(for: item.masterClip ?? item.importedClip) : name
+    }
+
+    /// Every VFX Master List shot — matched (`comparedItems`) or not (`unmatchedMasterItems`) —
+    /// together, sorted by VFX Name, so the full master list is always visible in its normal order
+    /// and an unmatched master shot still sits exactly where it belongs instead of floating off in
+    /// a separate pool. Only unmatched *remote* shots stay elsewhere (`needsMatchSection`) — they
+    /// don't have a VFX Name yet to sort into this order by.
+    private var masterOrderedItems: [MergeItem] {
+        (comparedItems + unmatchedMasterItems).sorted {
+            masterSortKey($0).localizedStandardCompare(masterSortKey($1)) == .orderedAscending
+        }
+    }
+
     /// `hideResolved`-filtered versions of the groups above — what actually gets rendered.
     /// A fully-resolved compared item (identical, or a conflict with every field decided) is what
     /// subsumed the old "Hide Matching" behavior: turning this on empties it out of the list
     /// along with everything else that's clean.
     private func visible(_ items: [MergeItem]) -> [MergeItem] { hideResolved ? items.filter { !$0.isResolved } : items }
     private var visibleUnmatchedRemote: [MergeItem] { visible(unmatchedRemoteItems) }
-    private var visibleUnmatchedMaster: [MergeItem] { visible(unmatchedMasterItems) }
-    private var visibleComparedItems: [MergeItem] { visible(comparedItems) }
+    private var visibleComparedItems: [MergeItem] { visible(masterOrderedItems) }
+    // Select All/Deselect All and the selection-count caption only ever target real field-level
+    // conflicts — a `.missing` row (interleaved into `visibleComparedItems` above) has no
+    // checkbox and nothing for a bulk column resolution to apply to.
+    private var visibleSelectableItems: [MergeItem] { visible(comparedItems) }
 
     private var allColumns: [String] {
         MergeManager.orderedColumns(for: mergeItems.flatMap { [$0.masterClip, $0.importedClip].compactMap { $0 } })
@@ -102,6 +152,57 @@ struct SyncReviewView: View {
         return "\(file) @ \(tc)"
     }
 
+    /// A shot's name, bold like everywhere else — but clickable (jumping DaVinci Resolve to it,
+    /// see `onJumpToClip`) whenever that's wired up and this particular clip actually has a saved
+    /// TC In to jump to. Falls back to plain, non-interactive text otherwise.
+    @ViewBuilder
+    private func clipNameText(_ clip: ClipData?) -> some View {
+        clipNameText(nameFrom: clip, jumpFrom: clip)
+    }
+
+    /// Same idea, but the displayed name and the jump target can be two different clips — used by
+    /// `conflictPair`, where the heading is always the VFX Master List's own name for a shot (see
+    /// `masterOrderedItems`), while the freshest, most-likely-to-still-be-accurate TC to actually
+    /// jump to is whichever side's import just reported it (falling back to the master clip's own
+    /// TC only when there's no imported clip to prefer, e.g. an unmatched master-only shot).
+    @ViewBuilder
+    private func clipNameText(nameFrom nameClip: ClipData?, jumpFrom jumpClip: ClipData?) -> some View {
+        let name = displayName(for: nameClip)
+        if let jumpClip, let onJumpToClip, !jumpClip.tcIn.isEmpty {
+            Button { onJumpToClip(jumpClip) } label: {
+                Text(name).bold()
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(.accentColor)
+            .help("Jump to this shot's timecode in DaVinci Resolve")
+        } else {
+            Text(name).bold()
+        }
+    }
+
+    /// Same idea as `clipNameText`, for `missingRow`'s master-only shots — which additionally
+    /// need the strikethrough/dimming treatment once marked removed, and a tooltip that's honest
+    /// about the jump target possibly being stale (this is the *last known* position; nothing in
+    /// the fresh import claimed this shot, so Resolve may no longer have anything there).
+    @ViewBuilder
+    private func missingRowNameText(_ clip: ClipData?, resolution: MissingResolution?) -> some View {
+        let name = displayName(for: clip)
+        let removed = resolution == .markRemoved
+        if let clip, let onJumpToClip, !clip.tcIn.isEmpty {
+            Button { onJumpToClip(clip) } label: {
+                Text(name).bold().strikethrough(removed)
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(removed ? .secondary : .accentColor)
+            .help("Jump to this shot's last known timecode in DaVinci Resolve")
+        } else {
+            Text(name)
+                .bold()
+                .strikethrough(removed)
+                .foregroundColor(removed ? .secondary : .primary)
+        }
+    }
+
     private var allResolved: Bool { mergeItems.allSatisfy(\.isResolved) }
 
     /// How many resolved items will actually change the local VFX Master List on Resync.
@@ -127,6 +228,44 @@ struct SyncReviewView: View {
         return modifiedPushes + missingPushes
     }
 
+    /// The size (in points — already display-scale-aware, so this isn't a Retina/4K pixel-vs-point
+    /// mixup) of whichever window is in front right before this sheet opens. Callers capture this
+    /// explicitly just before setting their `show...Review` flag, since by the time this view's
+    /// body actually runs, the sheet's own window may already be key. The default here only
+    /// matters if a call site is ever added that forgets to pass `preferredSize` explicitly.
+    static func currentReferenceWindowSize() -> CGSize {
+        if let window = NSApplication.shared.keyWindow ?? NSApplication.shared.mainWindow, window.isVisible {
+            return window.frame.size
+        }
+        if let screen = NSScreen.main {
+            return CGSize(width: screen.visibleFrame.width * 0.75, height: screen.visibleFrame.height * 0.8)
+        }
+        return CGSize(width: 1200, height: 800)
+    }
+
+    /// `preferredSize`, scaled down a bit and clamped between the window's practical floor (the
+    /// old fixed minimum) and the current screen's visible area — so the review window tracks
+    /// wherever the presenting window currently is/how it's currently sized, instead of expanding
+    /// to fit a long shot list or wide column set on its own.
+    private var reviewWindowSize: CGSize {
+        let screenLimit = NSScreen.main?.visibleFrame.size ?? CGSize(width: 1600, height: 1000)
+        let width = max(880, min(preferredSize.width * 0.92, screenLimit.width * 0.95))
+        let height = max(620, min(preferredSize.height * 0.92, screenLimit.height * 0.92))
+        return CGSize(width: width, height: height)
+    }
+
+    /// Plain-language reason Resync is still disabled — shown both as caption text and as the
+    /// button's own tooltip, so it's never a mystery why it's grayed out.
+    private var unresolvedSummary: String {
+        let needsMatch = unmatchedRemoteItems.count + unmatchedMasterItems.count
+        let conflicts = unresolvedConflictItems.count
+        var parts: [String] = []
+        if needsMatch > 0 { parts.append("\(needsMatch) shot\(needsMatch == 1 ? "" : "s") still \(needsMatch == 1 ? "needs" : "need") a match") }
+        if conflicts > 0 { parts.append("\(conflicts) unresolved conflict\(conflicts == 1 ? "" : "s")") }
+        guard !parts.isEmpty else { return "" }
+        return "Resolve \(parts.joined(separator: " and ")) before you can Resync."
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -137,7 +276,7 @@ struct SyncReviewView: View {
                     needsMatchSection
                     comparedSection
 
-                    if visibleUnmatchedRemote.isEmpty && visibleUnmatchedMaster.isEmpty && visibleComparedItems.isEmpty {
+                    if visibleUnmatchedRemote.isEmpty && visibleComparedItems.isEmpty {
                         Group {
                             if hideResolved && !mergeItems.isEmpty {
                                 Text("Everything is resolved. Turn off \"Hide Resolved\" to review it again, or Resync below.")
@@ -156,7 +295,10 @@ struct SyncReviewView: View {
             Divider()
             footer
         }
-        .frame(minWidth: 880, minHeight: 620)
+        .frame(
+            minWidth: 880, idealWidth: reviewWindowSize.width, maxWidth: reviewWindowSize.width,
+            minHeight: 620, idealHeight: reviewWindowSize.height, maxHeight: reviewWindowSize.height
+        )
         .sheet(item: relinkBinding) { item in
             RelinkPickerSheet(
                 candidates: MergeManager.unclaimedMasterClips(master: allMasterClips, mergeItems: mergeItems),
@@ -213,75 +355,88 @@ struct SyncReviewView: View {
                     .foregroundColor(.green)
             }
             .font(.subheadline)
-
-            Divider().frame(height: 20)
-
-            Button(hideResolved ? "Show Resolved" : "Hide Resolved") { hideResolved.toggle() }
-                .controlSize(.small)
-                .help("Hide every shot with no remaining discrepancy, matches included, so only what still needs attention stays visible.")
         }
         .padding()
         .liquidGlassBar()
     }
 
+    @ViewBuilder
     private var footer: some View {
-        HStack {
-            Button("Cancel", role: .cancel) { onCancel() }
-                .keyboardShortcut(.escape, modifiers: [])
+        if let progress = applyProgress {
+            applyStatusBar(progress)
+                .padding()
+        } else {
+            HStack {
+                Button("Cancel", role: .cancel) { onCancel() }
+                    .keyboardShortcut(.escape, modifiers: [])
 
-            Spacer()
+                // Right next to Resync, not up in the header, so it reads as "only show me what
+                // still needs a decision before I sync" rather than an unrelated view option.
+                Button(hideResolved ? "Show Resolved" : "Hide Resolved") { hideResolved.toggle() }
+                    .controlSize(.small)
+                    .help("Hide every shot with no remaining discrepancy, matches included, so only what still needs attention stays visible.")
 
-            VStack(alignment: .trailing, spacing: 2) {
-                if !allResolved {
-                    Text("Resolve every unlinked shot and conflict to continue")
+                Spacer()
+
+                VStack(alignment: .trailing, spacing: 2) {
+                    if !allResolved {
+                        Text(unresolvedSummary)
+                    }
+                    Text(supportsPush
+                        ? "\(localChangeCount) change\(localChangeCount == 1 ? "" : "s") to VFX Master List · \(remoteChangeCount) to \(sourceLabel)"
+                        : "\(localChangeCount) change\(localChangeCount == 1 ? "" : "s") to VFX Master List")
                 }
-                Text(supportsPush
-                    ? "\(localChangeCount) change\(localChangeCount == 1 ? "" : "s") to VFX Master List · \(remoteChangeCount) to \(sourceLabel)"
-                    : "\(localChangeCount) change\(localChangeCount == 1 ? "" : "s") to VFX Master List")
-            }
-            .font(.caption)
-            .foregroundColor(.secondary)
+                .font(.caption)
+                .foregroundColor(.secondary)
 
-            Button("Resync") { onApply() }
-                .liquidGlassButton(prominent: true)
-                .disabled(!allResolved)
-                .keyboardShortcut(.defaultAction)
+                Button("Resync") { onApply() }
+                    .liquidGlassButton(prominent: true)
+                    .disabled(!allResolved)
+                    .keyboardShortcut(.defaultAction)
+                    // Same reason shown as caption text, but right on the button itself — so
+                    // hovering the grayed-out button directly answers "why can't I click this".
+                    .help(allResolved ? "Apply every resolved change." : unresolvedSummary)
+            }
+            .padding()
         }
-        .padding()
+    }
+
+    /// Shown in place of the footer's buttons while `onApply()` is actively writing changes out —
+    /// to the VFX Master List and, for Sheet Sync, the remote sheet too — so a run over many shots
+    /// reads as "in progress, this many left" instead of the window just looking stuck.
+    private func applyStatusBar(_ progress: SyncApplyProgress) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                ProgressView(value: progress.total > 0 ? Double(progress.current) : 0, total: Double(max(progress.total, 1)))
+                Text("\(progress.current)/\(progress.total)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundColor(.secondary)
+                    .frame(minWidth: 50, alignment: .trailing)
+            }
+            Text(progress.label)
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
     }
 
     // MARK: - Needs a Match
 
-    // Both unmatched sides shown together but clearly split into their own sub-lists — an
-    // unmatched remote shot and an unmatched master shot are the same underlying problem (nothing
-    // to compare against yet) from opposite directions.
+    // Only the remote side now — an unmatched *master* shot isn't segregated up here anymore, it
+    // stays inline in the VFX Master List below, sorted into its normal alphabetical position
+    // (see `masterOrderedItems`), since it does have a real VFX Name to sit in that order by. An
+    // unmatched *remote* shot doesn't (nothing's claimed it yet), so it has nowhere meaningful to
+    // sort into and stays here instead.
     @ViewBuilder
     private var needsMatchSection: some View {
-        if !visibleUnmatchedRemote.isEmpty || !visibleUnmatchedMaster.isEmpty {
+        if !visibleUnmatchedRemote.isEmpty {
             section(title: "Needs a Match", systemImage: "questionmark.circle.fill", color: .orange) {
-                VStack(alignment: .leading, spacing: 14) {
-                    if !visibleUnmatchedRemote.isEmpty {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Remote List (\(sourceLabel)) — not in VFX Master List")
-                                .font(.caption).bold().foregroundColor(remoteColor)
-                            VStack(spacing: 0) {
-                                ForEach(visibleUnmatchedRemote) { item in
-                                    unlinkedRow(item: item)
-                                    Divider()
-                                }
-                            }
-                        }
-                    }
-                    if !visibleUnmatchedMaster.isEmpty {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("VFX Master List — not in \(sourceLabel)")
-                                .font(.caption).bold().foregroundColor(masterColor)
-                            VStack(spacing: 0) {
-                                ForEach(visibleUnmatchedMaster) { item in
-                                    missingRow(item: item)
-                                    Divider()
-                                }
-                            }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Remote List (\(sourceLabel)) — not in VFX Master List")
+                        .font(.caption).bold().foregroundColor(remoteColor)
+                    VStack(spacing: 0) {
+                        ForEach(visibleUnmatchedRemote) { item in
+                            unlinkedRow(item: item)
+                            Divider()
                         }
                     }
                 }
@@ -292,7 +447,7 @@ struct SyncReviewView: View {
     private func unlinkedRow(item: MergeItem) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(displayName(for: item.importedClip)).bold()
+                clipNameText(item.importedClip)
                 if !item.candidateMasterClips.isEmpty {
                     Text("\(item.candidateMasterClips.count) similar shot(s) found — review before linking")
                         .font(.caption2)
@@ -326,23 +481,41 @@ struct SyncReviewView: View {
     @ViewBuilder
     private var comparedSection: some View {
         if !visibleComparedItems.isEmpty {
-            section(title: "Compared Shots", systemImage: "arrow.left.arrow.right.circle.fill", color: .secondary) {
-                let selectedVisibleCount = selectedConflictIds.intersection(Set(visibleComparedItems.map(\.id))).count
-                if selectedVisibleCount > 0 {
-                    HStack {
+            section(title: "VFX Master List", systemImage: "list.bullet.rectangle", color: .secondary) {
+                let selectedVisibleCount = selectedConflictIds.intersection(Set(visibleSelectableItems.map(\.id))).count
+                HStack {
+                    Button("Select All") {
+                        selectedConflictIds = Set(visibleSelectableItems.map(\.id))
+                        lastSelectedConflictId = visibleSelectableItems.last?.id
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    Button("Deselect All") {
+                        selectedConflictIds.removeAll()
+                        lastSelectedConflictId = nil
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .disabled(selectedVisibleCount == 0)
+                    if selectedVisibleCount > 0 {
                         Text("\(selectedVisibleCount) selected — resolving a field applies it to all of them")
                             .font(.caption)
                             .foregroundColor(.accentColor)
-                        Button("Clear") { selectedConflictIds.removeAll() }
-                            .buttonStyle(.plain)
-                            .font(.caption)
                     }
                 }
                 ScrollView(.horizontal) {
                     VStack(alignment: .leading, spacing: 18) {
                         columnHeaderRow
+                        // Every VFX Master List shot, in its normal alphabetical order — matched
+                        // shots render as a full conflict/match pair, an unmatched one (no import
+                        // claimed it) as a plain row with its own Link…/Push/Mark Removed actions,
+                        // right where it belongs instead of floating off in a separate section.
                         ForEach(visibleComparedItems) { item in
-                            conflictPair(itemId: item.id)
+                            if item.state == .missing {
+                                missingRow(item: item)
+                            } else {
+                                conflictPair(itemId: item.id)
+                            }
                         }
                     }
                 }
@@ -350,20 +523,29 @@ struct SyncReviewView: View {
         }
     }
 
+    // Standard modern-UI selection semantics: a plain click selects only that row (replacing
+    // whatever was selected before); shift-click extends a contiguous range from the last
+    // anchor; command-click adds/removes just that row without touching the rest.
     private func toggleConflictSelection(_ id: UUID) {
-        if NSEvent.modifierFlags.contains(.shift), let anchor = lastSelectedConflictId {
-            let ids = visibleComparedItems.map(\.id)
+        let modifiers = NSEvent.modifierFlags
+        if modifiers.contains(.shift), let anchor = lastSelectedConflictId {
+            let ids = visibleSelectableItems.map(\.id)
             if let anchorIdx = ids.firstIndex(of: anchor), let clickedIdx = ids.firstIndex(of: id) {
                 let range = anchorIdx <= clickedIdx ? anchorIdx...clickedIdx : clickedIdx...anchorIdx
-                for i in range { selectedConflictIds.insert(ids[i]) }
-                return
+                selectedConflictIds = Set(range.map { ids[$0] })
+                return // keep the existing anchor so further shift-clicks extend from the same origin
             }
         }
-        if selectedConflictIds.contains(id) {
-            selectedConflictIds.remove(id)
-        } else {
-            selectedConflictIds.insert(id)
+        if modifiers.contains(.command) {
+            if selectedConflictIds.contains(id) {
+                selectedConflictIds.remove(id)
+            } else {
+                selectedConflictIds.insert(id)
+            }
+            lastSelectedConflictId = id
+            return
         }
+        selectedConflictIds = [id]
         lastSelectedConflictId = id
     }
 
@@ -395,8 +577,8 @@ struct SyncReviewView: View {
                     .foregroundColor(isSelected ? .accentColor : .secondary)
                     .contentShape(Rectangle())
                     .onTapGesture { toggleConflictSelection(itemId) }
-                    .help("Select — shift-click to select a range. Resolving one field then applies it to every selected shot with a conflict there.")
-                Text(displayName(for: item.wrappedValue.importedClip)).bold()
+                    .help("Click to select just this shot, ⇧-click to select a range, ⌘-click to add/remove it from the selection. Resolving one field then applies it to every selected shot with a conflict there.")
+                clipNameText(nameFrom: item.wrappedValue.masterClip, jumpFrom: item.wrappedValue.importedClip ?? item.wrappedValue.masterClip)
                 if isClean {
                     Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
                 }
@@ -505,10 +687,8 @@ struct SyncReviewView: View {
     private func missingRow(item: MergeItem) -> some View {
         let resolution = item.missingResolution
         return HStack {
-            Text(displayName(for: item.masterClip))
-                .bold()
-                .strikethrough(resolution == .markRemoved)
-                .foregroundColor(resolution == .markRemoved ? .secondary : .primary)
+            missingRowNameText(item.masterClip, resolution: resolution)
+            Text("not in \(sourceLabel)").font(.caption2).foregroundColor(.secondary)
             Spacer()
             // Link across to an unmatched remote item, for when the matcher just couldn't tell
             // this is the same shot as one of the "Remote List" rows above (e.g. a heavy rename)
@@ -531,7 +711,15 @@ struct SyncReviewView: View {
                 .liquidGlassButton(prominent: resolution == .markRemoved)
                 .tint(.red)
         }
-        .padding(.vertical, 6)
+        .padding(8)
+        // Interleaved among conflictPair's cards in the same master-ordered list now (rather than
+        // its own segregated section), so it gets the same card treatment to read as one of the
+        // list's normal rows instead of looking like a stray leftover row.
+        .liquidGlassPanel(cornerRadius: 8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(resolution != nil ? Color.green.opacity(0.4) : Color.clear, lineWidth: 2)
+        )
     }
 
     // MARK: - Actions

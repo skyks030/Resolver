@@ -48,6 +48,13 @@ struct ProjectExportView: View {
     @State private var pendingMergeItems: [MergeItem] = []
     @State private var pendingSceneMarkers: [MarkerData] = []
     @State private var pendingIgnoredDiffKeys: Set<String> = []
+    @State private var pendingReviewWindowSize: CGSize = CGSize(width: 1200, height: 800)
+    @State private var mergeReviewApplyProgress: SyncApplyProgress? = nil
+    // Only a real DaVinci Resolve index run's TC values are guaranteed to still correspond to
+    // Resolve's current project state — a hand-picked CSV might be old, edited, or from a
+    // different project entirely, so "jump to this shot in Resolve" only ever offers itself for
+    // that one review context (see SyncReviewView.onJumpToClip).
+    @State private var pendingReviewFromDaVinciIndex = false
     
     // Scene Manager & Generator States
     @State private var showSceneManager = false
@@ -1487,22 +1494,31 @@ struct ProjectExportView: View {
             sourceLabel: "DaVinci Resolve / CSV Import",
             supportsPush: false,
             ignoredDiffKeys: pendingIgnoredDiffKeys,
+            preferredSize: pendingReviewWindowSize,
+            applyProgress: $mergeReviewApplyProgress,
+            onJumpToClip: pendingReviewFromDaVinciIndex ? { clip in jumpToClipInResolve(clip) } : nil,
             onApply: {
-                let oldList = projectManager.currentMasterList
-                var newMaster = projectManager.currentMasterList
-                MergeManager.applyMerge(master: &newMaster, mergeItems: pendingMergeItems)
+                Task {
+                    let oldList = projectManager.currentMasterList
+                    var newMaster = projectManager.currentMasterList
+                    mergeReviewApplyProgress = SyncApplyProgress(current: 0, total: pendingMergeItems.count, label: "Applying to VFX Master List…")
+                    await MergeManager.applyMergeWithProgress(master: &newMaster, mergeItems: pendingMergeItems) { current, total in
+                        mergeReviewApplyProgress = SyncApplyProgress(current: current, total: total, label: "Applying to VFX Master List…")
+                    }
 
-                // Only pass markers if it was a Resolve Index (not a CSV import)
-                if !pendingSceneMarkers.isEmpty {
-                    projectManager.updateMasterList(with: newMaster, sceneMarkers: pendingSceneMarkers)
-                } else {
-                    projectManager.updateMasterList(with: newMaster)
-                }
-                projectManager.registerUndo(\.currentMasterList, actionName: "Import Merge", from: oldList) {
-                    self.projectManager.saveMasterList()
-                }
+                    // Only pass markers if it was a Resolve Index (not a CSV import)
+                    if !pendingSceneMarkers.isEmpty {
+                        projectManager.updateMasterList(with: newMaster, sceneMarkers: pendingSceneMarkers)
+                    } else {
+                        projectManager.updateMasterList(with: newMaster)
+                    }
+                    projectManager.registerUndo(\.currentMasterList, actionName: "Import Merge", from: oldList) {
+                        self.projectManager.saveMasterList()
+                    }
 
-                showMergeReview = false
+                    mergeReviewApplyProgress = nil
+                    showMergeReview = false
+                }
             },
             onCancel: {
                 showMergeReview = false
@@ -1514,18 +1530,32 @@ struct ProjectExportView: View {
         guard let project = projectManager.currentProject else { return }
         let preprocessed = projectManager.prepareImportedClips(importedClips, projectId: project.id)
 
+        let master = projectManager.currentMasterList
+
         // DaVinci Resolve has no concept of a VFX Name — it's assigned entirely inside Resolver
         // (VFX Name Generator / manual rename), never something an index can read back. Without
         // this, every single indexed shot would show a bogus "VFX Name" conflict against its real
-        // master-list name. A hand-picked CSV import keeps full diffing — it may genuinely carry
-        // a real VFX Name column (e.g. a previously-exported master list). "Thumbnail Updated" is
-        // the same story — a purely local, Resolver-generated field an index can never carry, so
-        // it'd otherwise show a bogus conflict on every already-thumbnailed shot. Sheet Sync
-        // deliberately does NOT ignore either — comparing a synced sheet's real values is the
-        // whole point there.
-        let ignoredKeys: Set<String> = isFromDaVinciIndex ? ["VFX Name", "Original VFX Name", "Thumbnail Updated"] : []
+        // master-list name. The same logic generalizes to *any* master-list column an index run
+        // simply never carries at all — e.g. a custom "Description" column from a prior CSV
+        // import — those would otherwise show a permanent, never-resolvable-feeling discrepancy
+        // on every single shot forever, since nothing about a DaVinci index could ever supply a
+        // value for them. Computed as "every master column not present on any freshly-imported
+        // clip" rather than a fixed list, so this covers whatever arbitrary custom columns this
+        // particular master list happens to have, not just the well-known ones. A hand-picked CSV
+        // import keeps full diffing — it may genuinely carry any of these columns (e.g. a
+        // previously-exported master list). Sheet Sync deliberately doesn't ignore any of this
+        // either — comparing a synced sheet's real values is the whole point there.
+        var ignoredKeys: Set<String> = []
+        if isFromDaVinciIndex {
+            let importedColumns = Set(preprocessed.flatMap { $0.dict.keys })
+            let masterColumns = Set(master.flatMap { $0.dict.keys })
+            // "Original VFX Name" is a special case: prepareImportedClips (above) always sets it
+            // to (empty) vfxName, so it's technically *present* as a key on every imported clip —
+            // just always blank — and wouldn't be caught by the "absent column" rule above.
+            ignoredKeys = Set(["VFX Name", "Original VFX Name", "Thumbnail Updated"])
+                .union(masterColumns.subtracting(importedColumns))
+        }
 
-        let master = projectManager.currentMasterList
         var items = MergeManager.compareColumnAware(master: master, imported: preprocessed, ignoredDiffKeys: ignoredKeys)
         // DaVinci/CSV import is a one-way read of "what currently exists" — a master shot this
         // import doesn't see at all is a discrepancy too (it may have been deleted in Resolve),
@@ -1535,9 +1565,39 @@ struct ProjectExportView: View {
         self.pendingMergeItems = items
         self.pendingSceneMarkers = markers
         self.pendingIgnoredDiffKeys = ignoredKeys
+        self.pendingReviewWindowSize = SyncReviewView.currentReferenceWindowSize()
+        self.pendingReviewFromDaVinciIndex = isFromDaVinciIndex
         self.showMergeReview = true
     }
-    
+
+    /// SyncReviewView's onJumpToClip — moves DaVinci Resolve's playhead to this shot's saved
+    /// Record TC In, switching to its registered Episode timeline first if the project uses one.
+    /// Only ever wired up for a real DaVinci Resolve index review (see pendingReviewFromDaVinciIndex).
+    private func jumpToClipInResolve(_ clip: ClipData) {
+        let timecode = clip.tcIn
+        guard !timecode.isEmpty else {
+            ConsoleLogger.shared.log("⚠️ Jump to Resolve: this shot has no saved TC In to jump to.")
+            return
+        }
+        let episode = clip.dict["Episode"] ?? ""
+        let episodesMap: [[String: Any]] = projectManager.currentEpisodes.map {
+            ["timelineName": $0.timelineName, "timelineUniqueId": $0.timelineUniqueId ?? "", "episodeNumber": $0.episodeNumber]
+        }
+        let label = clip.vfxName.isEmpty ? timecode : clip.vfxName
+        ConsoleLogger.shared.log("▶️ Jumping to '\(label)' in Resolve (episode \(episode.isEmpty ? "—" : episode), TC \(timecode))")
+
+        Task {
+            do {
+                try await JumpToClipRunner.jump(timecode: timecode, episode: episode, episodesMap: episodesMap)
+                ConsoleLogger.shared.log("✅ Jumped to \(timecode) in Resolve")
+            } catch {
+                ConsoleLogger.shared.log("❌ Jump to Resolve failed: \(error)")
+                self.showIndexingError = true
+                self.indexingErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
     // MARK: - Progress reporting (shared by indexing, batch ops, thumbnails)
 
     // Parses a "PROGRESS: x/y" line (as printed by clip-indexing.py, clip-grouping.py,

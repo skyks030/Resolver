@@ -301,32 +301,48 @@ class MergeManager {
     /// is simply skipped rather than guessed, so calling this on a partially-reviewed set can
     /// never silently overwrite or insert something the user hasn't decided on.
     static func applyMerge(master: inout [ClipData], mergeItems: [MergeItem]) {
-        for item in mergeItems {
-            guard item.isResolved else { continue }
+        for item in mergeItems { applyMergeItem(item, into: &master) }
+    }
 
-            switch item.state {
-            case .new:
-                guard let imp = item.importedClip else { continue }
-                master.append(imp)
+    /// Same as `applyMerge`, but yields to the run loop after each item so a caller driving a
+    /// visible progress counter (SyncReviewView's apply status bar) actually gets to redraw
+    /// between updates — plain `applyMerge` is a tight, synchronous in-memory loop that would
+    /// otherwise finish before SwiftUI ever got a chance to paint an intermediate frame.
+    @MainActor
+    static func applyMergeWithProgress(master: inout [ClipData], mergeItems: [MergeItem], onProgress: (Int, Int) -> Void) async {
+        let total = mergeItems.count
+        for (i, item) in mergeItems.enumerated() {
+            applyMergeItem(item, into: &master)
+            onProgress(i + 1, total)
+            await Task.yield()
+        }
+    }
 
-            case .modified, .identical:
-                guard let masterClip = item.masterClip, let imp = item.importedClip,
-                      let idx = master.firstIndex(where: { $0.id == masterClip.id }) else { continue }
-                var merged = masterClip
-                for key in item.diffKeys {
-                    if item.fieldWinners[key] == .incoming {
-                        merged.dict[key] = imp.dict[key]
-                    }
-                    // .master (or, defensively, unresolved) keeps the existing master value.
+    private static func applyMergeItem(_ item: MergeItem, into master: inout [ClipData]) {
+        guard item.isResolved else { return }
+
+        switch item.state {
+        case .new:
+            guard let imp = item.importedClip else { return }
+            master.append(imp)
+
+        case .modified, .identical:
+            guard let masterClip = item.masterClip, let imp = item.importedClip,
+                  let idx = master.firstIndex(where: { $0.id == masterClip.id }) else { return }
+            var merged = masterClip
+            for key in item.diffKeys {
+                if item.fieldWinners[key] == .incoming {
+                    merged.dict[key] = imp.dict[key]
                 }
-                master[idx] = merged
+                // .master (or, defensively, unresolved) keeps the existing master value.
+            }
+            master[idx] = merged
 
-            case .missing:
-                guard let masterClip = item.masterClip,
-                      let idx = master.firstIndex(where: { $0.id == masterClip.id }) else { continue }
-                if item.missingResolution == .markRemoved {
-                    master[idx].isRemoved = true
-                }
+        case .missing:
+            guard let masterClip = item.masterClip,
+                  let idx = master.firstIndex(where: { $0.id == masterClip.id }) else { return }
+            if item.missingResolution == .markRemoved {
+                master[idx].isRemoved = true
             }
         }
     }

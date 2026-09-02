@@ -44,7 +44,7 @@ enum SheetSyncScriptRunner {
     static func run(
         action: String, provider: SheetSyncProviderKind, token: String,
         link: String? = nil, sheetName: String? = nil, rows: [[String: String]]? = nil,
-        columnOrder: [String]? = nil
+        columnOrder: [String]? = nil, onProgress: ((Int, Int) -> Void)? = nil
     ) async throws -> SheetSyncScriptResult {
         var payload: [String: Any] = [
             "action": action,
@@ -64,8 +64,20 @@ enum SheetSyncScriptRunner {
         let data = try JSONSerialization.data(withJSONObject: payload)
         try data.write(to: tmpURL)
 
+        // "PROGRESS: x/y" lines — see sheet_sync.py's ms_write/google_write — parsed the same way
+        // every other Resolve script's progress reporting is (ProjectExportView.handleProgressLine).
+        let progressHandler: ((String) -> Void)? = onProgress.map { callback in
+            { line in
+                guard let range = line.range(of: "PROGRESS: ") else { return }
+                let value = String(line[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                let parts = value.components(separatedBy: "/")
+                guard parts.count == 2, let current = Int(parts[0]), let total = Int(parts[1]) else { return }
+                callback(current, total)
+            }
+        }
+
         return try await withCheckedThrowingContinuation { continuation in
-            PyScriptRunner.run(scriptName: "Resolve/Tools/sheet_sync", args: [tmpURL.path], showOutput: false, completion: { output in
+            PyScriptRunner.run(scriptName: "Resolve/Tools/sheet_sync", args: [tmpURL.path], showOutput: false, onProgress: progressHandler, completion: { output in
                 try? FileManager.default.removeItem(at: tmpURL)
 
                 guard let line = output.flatMap({ PyScriptRunner.lastJSONLine(in: $0) }),

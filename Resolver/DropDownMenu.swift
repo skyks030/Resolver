@@ -193,7 +193,13 @@ struct DropDownMenu: View {
                 NSApplication.shared.activate(ignoringOtherApps: true)
                 menuWindow?.orderOut(nil)
             }
-            
+
+            MenuRow(title: "Color Group Manager") {
+                openWindow(id: "color-group-manager")
+                NSApplication.shared.activate(ignoringOtherApps: true)
+                menuWindow?.orderOut(nil)
+            }
+
             Divider().padding(.vertical, 4)
             
             MenuRow(title: "Debug Mode", icon: isDebugMode ? "checkmark" : nil) {
