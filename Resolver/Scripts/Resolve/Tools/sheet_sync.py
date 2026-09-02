@@ -124,29 +124,63 @@ def build_id_index(header, existing_values):
     return id_row_index
 
 
-def apply_upserts(existing_values, rows, column_order=None):
+def plan_upserts(existing_values, rows, column_order=None):
+    """Builds a *minimal* write plan instead of a full rewritten grid: only the header (if it
+    genuinely widened), the specific existing rows that actually changed, and any brand-new rows
+    to append. Nothing else already in the sheet is ever touched or resent.
+
+    This replaces an earlier version that read the whole used range, rebuilt one big rectangular
+    grid locally, and PATCHed the entire thing back. That had a real bug: widening the header row
+    to fit a newly-introduced column left every *untouched* data row at its old (shorter) length,
+    so the grid being written was jagged — not a problem for reading a row back (a missing
+    trailing cell just reads as ""), but Microsoft Graph's range PATCH requires a perfectly
+    rectangular array matching the target address exactly, and rejected it with "the number of
+    rows or columns in the input array doesn't match the size or dimensions of the range"
+    (InvalidArgument). Writing only the rows that actually changed, each individually sized to
+    its own content, can't hit that class of bug at all — every single write is trivially
+    rectangular (one row, or one contiguous new-rows block, each padded to exactly its own
+    column count)."""
+    old_header = [str(h) for h in existing_values[0]] if existing_values else []
     header = build_header(existing_values, rows, column_order)
-    id_row_index = build_id_index(header, existing_values)
+    id_row_index = build_id_index(header, existing_values)  # UPSERT_KEY_COLUMN value -> 1-indexed sheet row
 
-    values = [list(r) for r in existing_values] if existing_values else []
-    if not values:
-        values = [header]
-    elif len(values[0]) < len(header):
-        # Widen the existing header row with any newly-introduced columns. Existing data rows
-        # keep their original (shorter) length — reading a missing trailing cell as "" (see
-        # build_id_index/values_to_rows) already handles that, so nothing else needs to change.
-        values[0] = header
-
+    # De-duplicate this batch by the upsert key first — two rows in the same write sharing a VFX
+    # Name would otherwise either produce two separate PATCHes to the *same* existing sheet row
+    # (Microsoft: the second silently overwrites the first with no error; Google: two identical
+    # ranges in one batchUpdate call, untested/risky) or two "new" rows appended with the same
+    # name. Last one in wins, deliberately, keeping the order Swift already sent them in — same
+    # semantics as before, just made explicit instead of an accidental side effect of two writes
+    # landing on the same address.
+    deduped_rows = []
+    index_by_key = {}
     for row in rows:
+        rid = row.get(UPSERT_KEY_COLUMN)
+        if rid and rid in index_by_key:
+            deduped_rows[index_by_key[rid]] = row
+        else:
+            if rid:
+                index_by_key[rid] = len(deduped_rows)
+            deduped_rows.append(row)
+
+    updates = []   # [(row_number, [values]), ...] — existing rows being overwritten in place
+    appended = []  # [[values], ...] — brand-new rows, written as one contiguous block
+    for row in deduped_rows:
         rid = row.get(UPSERT_KEY_COLUMN)
         new_row = [row.get(col, "") for col in header]
         if rid and rid in id_row_index:
-            values[id_row_index[rid]] = new_row
+            updates.append((id_row_index[rid] + 1, new_row))
         else:
-            values.append(new_row)
-            if rid:
-                id_row_index[rid] = len(values) - 1
-    return values
+            appended.append(new_row)
+
+    existing_row_count = len(existing_values)  # includes the header row, if any
+    append_start_row = (existing_row_count if existing_row_count > 0 else 1) + 1
+
+    return {
+        "header": header if header != old_header else None,
+        "updates": updates,
+        "appended": appended,
+        "append_start_row": append_start_row,
+    }
 
 
 def col_letter(n):
@@ -213,16 +247,33 @@ def ms_write(link, sheet_name, rows, token, column_order=None):
     if not sheet_name:
         sheet_name = ms_first_worksheet_name(drive_id, item_id, token)
 
-    log(f"Reading current worksheet '{sheet_name}' to merge in new/updated rows...")
+    log(f"Reading current worksheet '{sheet_name}' to plan the write...")
     existing = http_json("GET", ms_used_range_url(drive_id, item_id, sheet_name), token)
     existing_values = existing.get("values", [])
-    new_values = apply_upserts(existing_values, rows, column_order)
+    plan = plan_upserts(existing_values, rows, column_order)
 
-    log(f"Writing {len(new_values)} row(s) (incl. header) back to '{sheet_name}'...")
-    address = f"A1:{col_letter(len(new_values[0]))}{len(new_values)}"
     encoded_sheet = urllib.parse.quote(sheet_name)
-    write_url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}/workbook/worksheets('{encoded_sheet}')/range(address='{address}')"
-    http_json("PATCH", write_url, token, body={"values": new_values})
+
+    def range_url(address):
+        return f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}/workbook/worksheets('{encoded_sheet}')/range(address='{address}')"
+
+    if plan["header"] is not None:
+        address = f"A1:{col_letter(len(plan['header']))}1"
+        http_json("PATCH", range_url(address), token, body={"values": [plan["header"]]})
+
+    for row_number, values in plan["updates"]:
+        address = f"A{row_number}:{col_letter(len(values))}{row_number}"
+        http_json("PATCH", range_url(address), token, body={"values": [values]})
+
+    if plan["appended"]:
+        start = plan["append_start_row"]
+        end = start + len(plan["appended"]) - 1
+        width = max(len(r) for r in plan["appended"])
+        address = f"A{start}:{col_letter(width)}{end}"
+        http_json("PATCH", range_url(address), token, body={"values": plan["appended"]})
+
+    log(f"Wrote {len(plan['updates'])} updated + {len(plan['appended'])} new row(s) to '{sheet_name}'"
+        f"{' (header widened)' if plan['header'] is not None else ''}.")
     return len(rows)
 
 
@@ -254,21 +305,44 @@ def google_fetch(link, sheet_name, token):
     return values_to_rows(result.get("values", [])), sheet_name
 
 
+def google_a1_sheet(sheet_name):
+    # A1-notation sheet reference for a batchUpdate range string (not a URL path segment) —
+    # always single-quoted, since that's valid even for a plain name and required for one with
+    # spaces/special characters; a literal quote in the name itself is escaped by doubling it,
+    # per spreadsheet convention.
+    return "'" + sheet_name.replace("'", "''") + "'"
+
+
 def google_write(link, sheet_name, rows, token, column_order=None):
     spreadsheet_id = google_spreadsheet_id(link)
     if not sheet_name:
         sheet_name = google_first_sheet_name(spreadsheet_id, token)
 
-    log(f"Reading current sheet '{sheet_name}' to merge in new/updated rows...")
+    log(f"Reading current sheet '{sheet_name}' to plan the write...")
     range_ = urllib.parse.quote(sheet_name)
     url = f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{range_}"
     existing = http_json("GET", url, token)
     existing_values = existing.get("values", [])
-    new_values = apply_upserts(existing_values, rows, column_order)
+    plan = plan_upserts(existing_values, rows, column_order)
 
-    log(f"Writing {len(new_values)} row(s) (incl. header) back to '{sheet_name}'...")
-    write_url = f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{range_}?valueInputOption=RAW"
-    http_json("PUT", write_url, token, body={"values": new_values})
+    a1_sheet = google_a1_sheet(sheet_name)
+    data = []
+    if plan["header"] is not None:
+        data.append({"range": f"{a1_sheet}!A1", "values": [plan["header"]]})
+    for row_number, values in plan["updates"]:
+        data.append({"range": f"{a1_sheet}!A{row_number}", "values": [values]})
+    if plan["appended"]:
+        data.append({"range": f"{a1_sheet}!A{plan['append_start_row']}", "values": plan["appended"]})
+
+    if data:
+        # One batched request for everything — Sheets' API (unlike Graph's per-range PATCH)
+        # supports multiple discontiguous ranges in a single call, and each entry's range only
+        # needs a starting cell — the values array's own shape determines its extent.
+        batch_url = f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values:batchUpdate"
+        http_json("POST", batch_url, token, body={"valueInputOption": "RAW", "data": data})
+
+    log(f"Wrote {len(plan['updates'])} updated + {len(plan['appended'])} new row(s) to '{sheet_name}'"
+        f"{' (header widened)' if plan['header'] is not None else ''}.")
     return len(rows)
 
 

@@ -37,6 +37,12 @@ struct SyncReviewView: View {
     // the list progressively narrow down to only what still needs attention.
     @State private var hideResolved = false
     @State private var relinkTarget: UUID? = nil
+    // Multi-select for the Conflicts grid — resolving one field for a shot that's part of the
+    // current selection applies that same direction to the same column on every other selected
+    // shot with a conflict there too (e.g. a batch VFX-Name rename affecting many shots at once).
+    // Anchor-based shift-click range select, same pattern used for the master list's own rows.
+    @State private var selectedConflictIds: Set<UUID> = []
+    @State private var lastSelectedConflictId: UUID? = nil
     private let columnWidth: CGFloat = 150
     private let gutterWidth: CGFloat = 112
     // Consistent color coding wherever the two sides are stacked, so which physical row is which
@@ -96,7 +102,8 @@ struct SyncReviewView: View {
 
     private var allResolved: Bool { mergeItems.allSatisfy(\.isResolved) }
 
-    private var changeCount: Int {
+    /// How many resolved items will actually change the local VFX Master List on Resync.
+    private var localChangeCount: Int {
         mergeItems.filter { item in
             switch item.state {
             case .identical: return false
@@ -104,7 +111,18 @@ struct SyncReviewView: View {
             case .new: return item.confirmedNew
             case .missing: return item.missingResolution == .markRemoved
             }
-        }.count + pushCandidates.filter(\.selected).count
+        }.count
+    }
+
+    /// How many resolved items will push a change out to the remote sheet — Sheet Sync only
+    /// (DaVinci/CSV import has no remote to write back to). A `.modified` pair only counts here
+    /// if at least one of its fields was resolved toward "keep local" (`.master`) — previously
+    /// this was entirely missing from the (single, combined) count, which is why the footer could
+    /// show "0" even with many local-wins conflicts configured to push out.
+    private var remoteChangeCount: Int {
+        guard supportsPush else { return 0 }
+        let modifiedPushes = mergeItems.filter { $0.state == .modified && $0.fieldWinners.values.contains(.master) }.count
+        return modifiedPushes + pushCandidates.filter(\.selected).count
     }
 
     var body: some View {
@@ -198,13 +216,18 @@ struct SyncReviewView: View {
 
             Spacer()
 
-            if !allResolved {
-                Text("Resolve every unlinked shot and conflict to continue")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+            VStack(alignment: .trailing, spacing: 2) {
+                if !allResolved {
+                    Text("Resolve every unlinked shot and conflict to continue")
+                }
+                Text(supportsPush
+                    ? "\(localChangeCount) change\(localChangeCount == 1 ? "" : "s") to VFX Master List · \(remoteChangeCount) to \(sourceLabel)"
+                    : "\(localChangeCount) change\(localChangeCount == 1 ? "" : "s") to VFX Master List")
             }
+            .font(.caption)
+            .foregroundColor(.secondary)
 
-            Button("Resync \(changeCount) Change\(changeCount == 1 ? "" : "s")") { onApply() }
+            Button("Resync") { onApply() }
                 .liquidGlassButton(prominent: true)
                 .disabled(!allResolved)
                 .keyboardShortcut(.defaultAction)
@@ -287,6 +310,17 @@ struct SyncReviewView: View {
     private var conflictsSection: some View {
         if !visibleConflictItems.isEmpty {
             section(title: "Conflicts — resolve each difference", systemImage: "exclamationmark.triangle.fill", color: .red) {
+                let selectedVisibleCount = selectedConflictIds.intersection(Set(visibleConflictItems.map(\.id))).count
+                if selectedVisibleCount > 0 {
+                    HStack {
+                        Text("\(selectedVisibleCount) selected — resolving a field applies it to all of them")
+                            .font(.caption)
+                            .foregroundColor(.accentColor)
+                        Button("Clear") { selectedConflictIds.removeAll() }
+                            .buttonStyle(.plain)
+                            .font(.caption)
+                    }
+                }
                 ScrollView(.horizontal) {
                     VStack(alignment: .leading, spacing: 18) {
                         columnHeaderRow
@@ -297,6 +331,23 @@ struct SyncReviewView: View {
                 }
             }
         }
+    }
+
+    private func toggleConflictSelection(_ id: UUID) {
+        if NSEvent.modifierFlags.contains(.shift), let anchor = lastSelectedConflictId {
+            let ids = visibleConflictItems.map(\.id)
+            if let anchorIdx = ids.firstIndex(of: anchor), let clickedIdx = ids.firstIndex(of: id) {
+                let range = anchorIdx <= clickedIdx ? anchorIdx...clickedIdx : clickedIdx...anchorIdx
+                for i in range { selectedConflictIds.insert(ids[i]) }
+                return
+            }
+        }
+        if selectedConflictIds.contains(id) {
+            selectedConflictIds.remove(id)
+        } else {
+            selectedConflictIds.insert(id)
+        }
+        lastSelectedConflictId = id
     }
 
     private var columnHeaderRow: some View {
@@ -319,8 +370,14 @@ struct SyncReviewView: View {
     private func conflictPair(itemId: UUID) -> some View {
         let item = itemBinding(itemId)
         let cols = displayColumns
+        let isSelected = selectedConflictIds.contains(itemId)
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
+                Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                    .foregroundColor(isSelected ? .accentColor : .secondary)
+                    .contentShape(Rectangle())
+                    .onTapGesture { toggleConflictSelection(itemId) }
+                    .help("Select — shift-click to select a range. Resolving one field then applies it to every selected shot with a conflict there.")
                 Text(displayName(for: item.wrappedValue.importedClip)).bold()
                 if let confidence = item.wrappedValue.matchConfidence {
                     Text("via \(confidence.label)").font(.caption2).foregroundColor(.secondary)
@@ -350,6 +407,10 @@ struct SyncReviewView: View {
         }
         .padding(8)
         .liquidGlassPanel(cornerRadius: 8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(isSelected ? Color.accentColor.opacity(0.6) : Color.clear, lineWidth: 2)
+        )
     }
 
     private enum RowSide { case incoming, master }
@@ -490,6 +551,19 @@ struct SyncReviewView: View {
     }
 
     private func setWinner(itemId: UUID, key: String, winner: FieldSide) {
+        // Acting on a shot that's part of a multi-selection applies this column's resolution to
+        // every selected shot at once (skipping any that don't actually conflict on this
+        // column) — an unambiguous "set to this direction" rather than single-item's toggle,
+        // since toggling would be confusing across a batch that may already be in mixed states.
+        if selectedConflictIds.contains(itemId), selectedConflictIds.count > 1 {
+            for id in selectedConflictIds {
+                mutate(itemId: id) { item in
+                    guard item.diffKeys.contains(key) else { return }
+                    item.fieldWinners[key] = winner
+                }
+            }
+            return
+        }
         mutate(itemId: itemId) { item in
             if item.fieldWinners[key] == winner {
                 item.fieldWinners.removeValue(forKey: key) // toggle back to unresolved

@@ -38,6 +38,17 @@ struct DebugConsoleView: View {
                     .font(.headline)
                 Spacer()
                 Button(action: {
+                    let pasteboard = NSPasteboard.general
+                    pasteboard.clearContents()
+                    pasteboard.setString(logger.logs.joined(separator: "\n"), forType: .string)
+                }) {
+                    Image(systemName: "doc.on.doc")
+                }
+                .buttonStyle(.plain)
+                .help("Copy All Logs")
+                .disabled(logger.logs.isEmpty)
+
+                Button(action: {
                     logger.clear()
                 }) {
                     Image(systemName: "trash")
@@ -47,9 +58,9 @@ struct DebugConsoleView: View {
             }
             .padding()
             .background(Color(NSColor.controlBackgroundColor))
-            
+
             Divider()
-            
+
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 2) {
@@ -59,6 +70,7 @@ struct DebugConsoleView: View {
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 2)
                                 .foregroundColor(log.lowercased().contains("error") || log.lowercased().contains("fehlschlag") ? .red : .primary)
+                                .textSelection(.enabled)
                                 .id(index)
                         }
                     }
