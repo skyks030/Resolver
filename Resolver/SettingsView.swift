@@ -22,13 +22,18 @@ struct SettingsView: View {
                 .tabItem {
                     Label("VFX", systemImage: "wand.and.stars")
                 }
-            
+
+            SheetSyncSettingsView()
+                .tabItem {
+                    Label("Sheet Sync", systemImage: "arrow.triangle.2.circlepath")
+                }
+
             AboutSettingsView(updateChecker: updateChecker)
                 .tabItem {
                     Label("About", systemImage: "info.circle")
                 }
         }
-        .frame(width: 450, height: 300)
+        .frame(width: 560, height: 480)
     }
 }
 

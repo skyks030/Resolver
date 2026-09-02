@@ -9,19 +9,22 @@ library (no extra pip dependency to install for this feature).
 
 Input (argv[1], a JSON file):
   {
-    "action": "fetch" | "write",
+    "action": "fetch" | "write" | "whoami",
     "provider": "microsoft" | "google",
     "accessToken": "...",
-    "link": "https://...",                  # the pasted share/document URL
+    "link": "https://...",                  # the pasted share/document URL — not needed for "whoami"
     "sheetName": "Sheet1" or null,           # null = first sheet/worksheet
     "rows": [ {"col": "value", ...}, ... ]   # only for action == "write" — upserted by the
                                               # "Resolve Unique ID" column, appended if not found
   }
 
 Output (stdout, single JSON line):
-  fetch: {"status": "success", "rows": [ {"col": "value", ...}, ... ], "sheetName": "..."}
-  write: {"status": "success", "written": N}
-  or:    {"error": "..."}
+  fetch:   {"status": "success", "rows": [ {"col": "value", ...}, ... ], "sheetName": "..."}
+  write:   {"status": "success", "written": N}
+  whoami:  {"status": "success", "name": "...", "email": "..."} — used by Settings' "Test
+           Sign-In", to confirm a Client ID/Secret + sign-in actually works before ever linking
+           a real sheet.
+  or:      {"error": "..."}
 """
 
 import sys
@@ -250,6 +253,20 @@ def google_write(link, sheet_name, rows, token):
     return len(rows)
 
 
+def ms_whoami(token):
+    result = http_json("GET", "https://graph.microsoft.com/v1.0/me", token)
+    name = result.get("displayName") or ""
+    email = result.get("mail") or result.get("userPrincipalName") or ""
+    return name, email
+
+
+def google_whoami(token):
+    result = http_json("GET", "https://www.googleapis.com/oauth2/v2/userinfo", token)
+    name = result.get("name") or ""
+    email = result.get("email") or ""
+    return name, email
+
+
 def main():
     if len(sys.argv) < 2:
         print(json.dumps({"error": "Missing JSON input file path"}))
@@ -264,20 +281,30 @@ def main():
     link = data.get("link")
     sheet_name = data.get("sheetName") or None
 
-    if action not in ("fetch", "write"):
-        print(json.dumps({"error": "Invalid action. Must be 'fetch' or 'write'."}))
+    if action not in ("fetch", "write", "whoami"):
+        print(json.dumps({"error": "Invalid action. Must be 'fetch', 'write', or 'whoami'."}))
         sys.exit(1)
     if provider not in ("microsoft", "google"):
         print(json.dumps({"error": "Invalid provider. Must be 'microsoft' or 'google'."}))
         sys.exit(1)
-    if not token or not link:
-        print(json.dumps({"error": "Missing accessToken or link."}))
+    if not token:
+        print(json.dumps({"error": "Missing accessToken."}))
+        sys.exit(1)
+    if action != "whoami" and not link:
+        print(json.dumps({"error": "Missing link."}))
         sys.exit(1)
 
     log(f"provider={provider} action={action}")
 
     try:
-        if action == "fetch":
+        if action == "whoami":
+            if provider == "microsoft":
+                name, email = ms_whoami(token)
+            else:
+                name, email = google_whoami(token)
+            log(f"Signed in as '{name}' <{email}>")
+            print(json.dumps({"status": "success", "name": name, "email": email}))
+        elif action == "fetch":
             if provider == "microsoft":
                 rows, resolved_sheet = ms_fetch(link, sheet_name, token)
             else:

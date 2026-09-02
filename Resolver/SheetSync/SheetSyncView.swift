@@ -17,6 +17,10 @@ struct SheetSyncView: View {
     @State private var reviewMergeItems: [MergeItem] = []
     @State private var reviewPushCandidates: [PushCandidate] = []
     @State private var resolvedSheetName: String = ""
+    // Bumped whenever this window regains focus (e.g. after the user sets up sign-in in the
+    // separate Settings window and switches back here) so `isProviderConfigured` — a live Keychain
+    // check, not a cached flag — gets re-evaluated instead of showing a stale "not connected" state.
+    @State private var signInRefreshTick = false
 
     private var linkedProviderKind: SheetSyncProviderKind? {
         project.sheetSyncProvider.flatMap { SheetSyncProviderKind(rawValue: $0) }
@@ -40,7 +44,7 @@ struct SheetSyncView: View {
             if !statusMessage.isEmpty {
                 HStack {
                     if isBusy { ProgressView().controlSize(.small) }
-                    Text(statusMessage).font(.caption).foregroundColor(.secondary)
+                    Text(statusMessage).font(.caption).foregroundColor(.secondary).textSelection(.enabled)
                 }
             }
 
@@ -53,7 +57,10 @@ struct SheetSyncView: View {
             }
         }
         .padding()
-        .frame(width: 520, height: 420)
+        .frame(width: 520, height: 440)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            signInRefreshTick.toggle()
+        }
         .alert("Sheet Sync Error", isPresented: $showError) {
             Button("OK", role: .cancel) { }
         } message: { Text(errorMessage) }
@@ -84,16 +91,21 @@ struct SheetSyncView: View {
             .labelsHidden()
 
             if !isProviderConfigured(selectedProvider) {
-                Label("This provider isn't configured yet — see SheetSyncProviderConfig.swift for the one-time setup.", systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundColor(.orange)
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("\(selectedProvider.displayName) isn't connected yet.", systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                    openSettingsButton
+                }
             }
 
             TextField(selectedProvider.linkPlaceholder, text: $linkText)
                 .textFieldStyle(.roundedBorder)
+                .disabled(!isProviderConfigured(selectedProvider))
 
             TextField("Sheet/Worksheet name (optional — defaults to the first)", text: $sheetNameText)
                 .textFieldStyle(.roundedBorder)
+                .disabled(!isProviderConfigured(selectedProvider))
 
             Button(action: linkAndSignIn) {
                 Text("Link & Sign In")
@@ -115,6 +127,12 @@ struct SheetSyncView: View {
                 .lineLimit(2)
                 .truncationMode(.middle)
 
+            if !resolvedSheetName.isEmpty {
+                Label("Last synced sheet: \(resolvedSheetName)", systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundColor(.green)
+            }
+
             HStack {
                 Button(action: compareNow) {
                     Label("Compare Now", systemImage: "arrow.triangle.2.circlepath")
@@ -130,16 +148,43 @@ struct SheetSyncView: View {
         .liquidGlassPanel(cornerRadius: 8)
     }
 
+    // Whether `kind` is actually ready to sync: a real, verified sign-in on file — not merely a
+    // non-empty Client ID field. Client ID alone proves nothing (it could be wrong, or never
+    // actually used to sign in yet), so the "Open Settings to Connect…" button below must stay
+    // visible, and the link fields disabled, until OAuthPKCESession confirms a genuine sign-in
+    // (a Keychain-stored refresh token from a completed OAuth exchange — see Test Sign-In in
+    // Settings, which is the normal way to establish this before ever pasting a sheet link here).
     private func isProviderConfigured(_ kind: SheetSyncProviderKind) -> Bool {
-        switch kind {
-        case .microsoft: return SheetSyncCredentials.isMicrosoftConfigured
-        case .google: return SheetSyncCredentials.isGoogleConfigured
+        OAuthPKCESession.shared(for: kind).isSignedIn
+    }
+
+    // SettingsLink is the public, documented way to open the Settings scene, but it only exists
+    // from macOS 14 — Resolver's deployment target is 13.5, so pre-14 falls back to the private
+    // `showSettingsWindow:` selector (the only way to do this at all before SettingsLink existed;
+    // it works, but macOS logs a "Please use SettingsLink" warning for it on newer systems, which
+    // is exactly why the macOS 14+ branch avoids it).
+    @ViewBuilder
+    private var openSettingsButton: some View {
+        if #available(macOS 14.0, *) {
+            SettingsLink {
+                Text("Open Settings to Connect…")
+            }
+            .liquidGlassButton(prominent: false)
+            .controlSize(.small)
+        } else {
+            Button("Open Settings to Connect…") {
+                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                NSApplication.shared.activate(ignoringOtherApps: true)
+            }
+            .liquidGlassButton(prominent: false)
+            .controlSize(.small)
         }
     }
 
     private func unlink() {
         projectManager.updateSheetSyncLink(projectId: project.id, provider: nil, link: nil, sheetName: nil)
         statusMessage = ""
+        resolvedSheetName = ""
     }
 
     private func linkAndSignIn() {
@@ -152,13 +197,7 @@ struct SheetSyncView: View {
 
         Task {
             do {
-                let session = OAuthPKCESession.shared(for: selectedProvider)
-                if session.isSignedIn {
-                    _ = try? await session.validAccessToken()
-                }
-                if !session.isSignedIn {
-                    try await session.signIn()
-                }
+                _ = try await SheetSyncScriptRunner.validToken(for: selectedProvider)
                 projectManager.updateSheetSyncLink(
                     projectId: project.id,
                     provider: selectedProvider.rawValue,
@@ -187,14 +226,14 @@ struct SheetSyncView: View {
 
         Task {
             do {
-                let token = try await validToken(for: kind)
-                let (rows, sheetName) = try await runSheetScript(
+                let token = try await SheetSyncScriptRunner.validToken(for: kind)
+                let result = try await SheetSyncScriptRunner.run(
                     action: "fetch", provider: kind, token: token, link: link,
-                    sheetName: project.sheetSyncSheetName, rows: nil
+                    sheetName: project.sheetSyncSheetName
                 )
-                resolvedSheetName = sheetName
+                resolvedSheetName = result.sheetName
 
-                let remoteClips = rows.map { ClipData(dict: $0) }
+                let remoteClips = result.rows.map { ClipData(dict: $0) }
                 let items = MergeManager.smartCompare(master: projectManager.currentMasterList, imported: remoteClips)
                 let matchedMasterIds = Set(items.compactMap { $0.masterClip?.id })
                 let localOnly = projectManager.currentMasterList.filter { !matchedMasterIds.contains($0.id) }
@@ -203,7 +242,7 @@ struct SheetSyncView: View {
                 reviewPushCandidates = localOnly.map { PushCandidate(clip: $0) }
                 isBusy = false
                 statusMessage = ""
-                ConsoleLogger.shared.log("✅ Sheet Sync: fetched \(rows.count) row(s) from '\(sheetName)', \(items.filter { $0.state == .new }.count) new, \(items.filter { $0.state == .modified }.count) modified, \(localOnly.count) local-only")
+                ConsoleLogger.shared.log("✅ Sheet Sync: fetched \(result.rows.count) row(s) from '\(result.sheetName)', \(items.filter { $0.state == .new }.count) new, \(items.filter { $0.state == .modified }.count) modified, \(localOnly.count) local-only")
                 showReview = true
             } catch {
                 isBusy = false
@@ -247,9 +286,9 @@ struct SheetSyncView: View {
 
         Task {
             do {
-                let token = try await validToken(for: kind)
+                let token = try await SheetSyncScriptRunner.validToken(for: kind)
                 let sheetName = resolvedSheetName.isEmpty ? project.sheetSyncSheetName : resolvedSheetName
-                _ = try await runSheetScript(action: "write", provider: kind, token: token, link: link, sheetName: sheetName, rows: rowsToPush)
+                _ = try await SheetSyncScriptRunner.run(action: "write", provider: kind, token: token, link: link, sheetName: sheetName, rows: rowsToPush)
                 isBusy = false
                 statusMessage = "Sync complete."
                 ConsoleLogger.shared.log("✅ Sheet Sync: push complete")
@@ -270,61 +309,5 @@ struct SheetSyncView: View {
             row["Resolve Unique ID"] = clip.id.uuidString
         }
         return row
-    }
-
-    // MARK: - Auth + script plumbing
-
-    private func validToken(for kind: SheetSyncProviderKind) async throws -> String {
-        let session = OAuthPKCESession.shared(for: kind)
-        do {
-            return try await session.validAccessToken()
-        } catch OAuthError.notSignedIn {
-            try await session.signIn()
-            return try await session.validAccessToken()
-        }
-    }
-
-    // Wraps PyScriptRunner's completion-handler API (see Resolve/Tools/sheet_sync.py) as async.
-    // Returns (rows, resolvedSheetName) for "fetch"; rows is empty for "write".
-    private func runSheetScript(
-        action: String, provider: SheetSyncProviderKind, token: String, link: String,
-        sheetName: String?, rows: [[String: String]]?
-    ) async throws -> ([[String: String]], String) {
-        var payload: [String: Any] = [
-            "action": action,
-            "provider": provider.rawValue,
-            "accessToken": token,
-            "link": link,
-        ]
-        if let sheetName, !sheetName.isEmpty { payload["sheetName"] = sheetName }
-        if let rows { payload["rows"] = rows }
-
-        let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
-        let data = try JSONSerialization.data(withJSONObject: payload)
-        try data.write(to: tmpURL)
-
-        return try await withCheckedThrowingContinuation { continuation in
-            PyScriptRunner.run(scriptName: "Resolve/Tools/sheet_sync", args: [tmpURL.path], showOutput: false) { output in
-                try? FileManager.default.removeItem(at: tmpURL)
-
-                guard let line = output.flatMap({ PyScriptRunner.lastJSONLine(in: $0) }),
-                      let lineData = line.data(using: .utf8),
-                      let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
-                    continuation.resume(throwing: SheetSyncError.noResponse)
-                    return
-                }
-                if let err = json["error"] as? String {
-                    continuation.resume(throwing: SheetSyncError.remote(err))
-                    return
-                }
-                guard json["status"] as? String == "success" else {
-                    continuation.resume(throwing: SheetSyncError.unexpected)
-                    return
-                }
-                let rows = (json["rows"] as? [[String: String]]) ?? []
-                let sheetName = (json["sheetName"] as? String) ?? ""
-                continuation.resume(returning: (rows, sheetName))
-            }
-        }
     }
 }

@@ -103,14 +103,15 @@ struct EpisodeManagementView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
                 }
-                ToolbarItemGroup(placement: .primaryAction) {
+                ToolbarItem(placement: .primaryAction) {
                     Button {
                         indexTimelines()
                     } label: {
                         Label("Re-Index", systemImage: "arrow.clockwise")
                     }
                     .disabled(isIndexing)
-
+                }
+                ToolbarItem(placement: .confirmationAction) {
                     Button("OK") {
                         confirmAndClose()
                     }
@@ -246,7 +247,7 @@ struct EpisodeManagementView: View {
         isIndexing = true
         indexingError = nil
 
-        PyScriptRunner.run(scriptName: "Resolve/Tools/list_timelines", showOutput: false) { output in
+        PyScriptRunner.run(scriptName: "Resolve/Tools/list_timelines", showOutput: false, completion: { output in
             DispatchQueue.main.async {
                 self.isIndexing = false
 
@@ -277,7 +278,7 @@ struct EpisodeManagementView: View {
                     ConsoleLogger.shared.log("Episode Manager JSON decode error: \(error). Raw: \(output)")
                 }
             }
-        }
+        })
     }
 
     // Re-Index always reflects the full, live state of the project: every timeline currently in

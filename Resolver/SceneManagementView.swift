@@ -148,7 +148,7 @@ struct SceneManagementView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
                 }
-                ToolbarItem(placement: .primaryAction) {
+                ToolbarItem(placement: .confirmationAction) {
                     Button("OK") { confirmAndClose() }
                         .liquidGlassButton(prominent: true)
                         .keyboardShortcut(.defaultAction)

@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 // Which remote spreadsheet service a project is linked to. The raw value is what's persisted on
 // `Project.sheetSyncProvider` and passed to the Python sync scripts.
@@ -23,56 +24,121 @@ enum SheetSyncProviderKind: String, CaseIterable, Identifiable {
     }
 }
 
-enum SheetSyncCredentials {
-    // ⚠️ SETUP REQUIRED — these are placeholders. Sheet Sync cannot sign in until you fill these
-    // in with your own one-time app registrations (this is a one-time setup for Resolver as a
-    // whole, not something each user does):
-    //
-    // Microsoft: https://entra.microsoft.com → Entra ID → App registrations → New registration.
-    //   - Platform: "Mobile and desktop applications", redirect URI: resolver-msauth://auth
-    //   - API permissions → Microsoft Graph → Delegated → Files.ReadWrite (+ offline_access,
-    //     openid, profile, which are usually pre-granted)
-    //   - Copy the "Application (client) ID" into microsoftClientId below.
-    //
-    // Google: https://console.cloud.google.com/apis/credentials → Create Credentials →
-    //   OAuth client ID → Application type: "Desktop app".
-    //   - Enable the "Google Sheets API" for the project (APIs & Services → Library).
-    //   - Copy the Client ID into googleClientId below. The "client secret" Google issues
-    //     alongside it is not sensitive for this client type — copy it into googleClientSecret too.
-    static let microsoftClientId = "REPLACE_WITH_YOUR_AZURE_APPLICATION_CLIENT_ID"
-    static let googleClientId = "REPLACE_WITH_YOUR_GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com"
-    static let googleClientSecret = "REPLACE_WITH_YOUR_GOOGLE_OAUTH_CLIENT_SECRET"
+// Fixed redirect values for Microsoft's custom-scheme flow — must exactly match what's entered
+// as the Redirect URI in the Entra app registration, and what's registered as a CFBundleURLTypes
+// entry in the app's Info.plist (Xcode → target → Info tab → URL Types).
+enum SheetSyncRedirect {
+    static let microsoftScheme = "resolver-msauth"
+    static let microsoftURI = "resolver-msauth://auth"
+}
 
-    static var isMicrosoftConfigured: Bool { !microsoftClientId.hasPrefix("REPLACE_WITH_") }
-    static var isGoogleConfigured: Bool { !googleClientId.hasPrefix("REPLACE_WITH_") }
+// Client ID/Secret are entered by the user in Settings → Sheet Sync (SheetSyncSettingsView) —
+// never hardcoded or edited in a setup file. Client IDs are public, non-secret identifiers by
+// design (both providers document this — PKCE is the actual security layer), so plain
+// UserDefaults is an appropriate store for those. Google's installed-app "client secret" isn't
+// meant to be kept confidential either per Google's own docs, but it's still stored in Keychain
+// alongside the actual sign-in tokens (see OAuthPKCESession) as defense in depth rather than a
+// plaintext preferences file, at essentially no extra cost.
+enum SheetSyncCredentialsKeys {
+    static let microsoftClientId = "sheetSync.microsoftClientId"
+    static let googleClientId = "sheetSync.googleClientId"
+}
+
+// Minimal Keychain get/set for the one credential (Google's client secret) that doesn't belong in
+// plain UserDefaults. Same service namespace and accessibility level as OAuthPKCESession's
+// refresh-token storage — see that file for why kSecAttrAccessibleWhenUnlockedThisDeviceOnly.
+private enum SheetSyncSecretsKeychain {
+    private static let service = "com.skyks030.Resolver.SheetSync"
+
+    static func set(_ value: String, account: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        SecItemDelete(query as CFDictionary)
+        guard !value.isEmpty else { return }
+        var attributes = query
+        attributes[kSecValueData as String] = Data(value.utf8)
+        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        SecItemAdd(attributes as CFDictionary, nil)
+    }
+
+    static func get(account: String) -> String {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data, let value = String(data: data, encoding: .utf8) else {
+            return ""
+        }
+        return value
+    }
+}
+
+enum SheetSyncCredentials {
+    static var microsoftClientId: String {
+        UserDefaults.standard.string(forKey: SheetSyncCredentialsKeys.microsoftClientId) ?? ""
+    }
+    static var googleClientId: String {
+        UserDefaults.standard.string(forKey: SheetSyncCredentialsKeys.googleClientId) ?? ""
+    }
+    static var googleClientSecret: String {
+        get { SheetSyncSecretsKeychain.get(account: "googleClientSecret") }
+    }
+
+    static func setGoogleClientSecret(_ value: String) {
+        SheetSyncSecretsKeychain.set(value, account: "googleClientSecret")
+    }
+
+    static var isMicrosoftConfigured: Bool {
+        !microsoftClientId.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+    static var isGoogleConfigured: Bool {
+        !googleClientId.trimmingCharacters(in: .whitespaces).isEmpty
+            && !googleClientSecret.trimmingCharacters(in: .whitespaces).isEmpty
+    }
 }
 
 extension OAuthProviderConfig {
-    static let microsoft = OAuthProviderConfig(
-        providerId: "microsoft",
-        authorizationEndpoint: URL(string: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize")!,
-        tokenEndpoint: URL(string: "https://login.microsoftonline.com/common/oauth2/v2.0/token")!,
-        clientId: SheetSyncCredentials.microsoftClientId,
-        clientSecret: nil,
-        scope: "offline_access openid profile Files.ReadWrite",
-        redirectURI: "resolver-msauth://auth",
-        redirectScheme: "resolver-msauth",
-        extraAuthParams: [:]
-    )
+    static var microsoft: OAuthProviderConfig {
+        OAuthProviderConfig(
+            providerId: "microsoft",
+            authorizationEndpoint: URL(string: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize")!,
+            tokenEndpoint: URL(string: "https://login.microsoftonline.com/common/oauth2/v2.0/token")!,
+            clientId: SheetSyncCredentials.microsoftClientId,
+            clientSecret: nil,
+            scope: "offline_access openid profile Files.ReadWrite",
+            redirectURI: SheetSyncRedirect.microsoftURI,
+            redirectScheme: SheetSyncRedirect.microsoftScheme,
+            usesLoopbackRedirect: false,
+            extraAuthParams: [:]
+        )
+    }
 
-    static let google = OAuthProviderConfig(
-        providerId: "google",
-        authorizationEndpoint: URL(string: "https://accounts.google.com/o/oauth2/v2/auth")!,
-        tokenEndpoint: URL(string: "https://oauth2.googleapis.com/token")!,
-        clientId: SheetSyncCredentials.googleClientId,
-        clientSecret: SheetSyncCredentials.googleClientSecret,
-        scope: "https://www.googleapis.com/auth/spreadsheets",
-        redirectURI: "resolver-googleauth://auth",
-        redirectScheme: "resolver-googleauth",
-        // access_type=offline + prompt=consent: without these Google often omits the
-        // refresh_token on anything but the very first consent for a given account.
-        extraAuthParams: ["access_type": "offline", "prompt": "consent"]
-    )
+    static var google: OAuthProviderConfig {
+        OAuthProviderConfig(
+            providerId: "google",
+            authorizationEndpoint: URL(string: "https://accounts.google.com/o/oauth2/v2/auth")!,
+            tokenEndpoint: URL(string: "https://oauth2.googleapis.com/token")!,
+            clientId: SheetSyncCredentials.googleClientId,
+            clientSecret: SheetSyncCredentials.googleClientSecret,
+            scope: "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile",
+            redirectURI: "", // unused — see usesLoopbackRedirect
+            redirectScheme: "",
+            // Google deprecated custom URL scheme redirects for native apps; the loopback flow
+            // needs no redirect URI to be registered in Google Cloud Console at all.
+            usesLoopbackRedirect: true,
+            // access_type=offline + prompt=consent: without these Google often omits the
+            // refresh_token on anything but the very first consent for a given account.
+            extraAuthParams: ["access_type": "offline", "prompt": "consent"]
+        )
+    }
 
     static func forProvider(_ kind: SheetSyncProviderKind) -> OAuthProviderConfig {
         switch kind {
