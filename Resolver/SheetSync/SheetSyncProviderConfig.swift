@@ -113,7 +113,12 @@ extension OAuthProviderConfig {
             tokenEndpoint: URL(string: "https://login.microsoftonline.com/common/oauth2/v2.0/token")!,
             clientId: SheetSyncCredentials.microsoftClientId,
             clientSecret: nil,
-            scope: "offline_access openid profile Files.ReadWrite",
+            // Files.ReadWrite (without .All) only covers files the signed-in user owns — a
+            // pasted share link almost always points at a file OWNED by a teammate and merely
+            // shared with this account, which Graph rejects under the narrower scope with a 403
+            // accessDenied on /shares/{shareId}/driveItem even though the sign-in itself succeeds.
+            // See https://learn.microsoft.com/en-us/onedrive/developer/rest-api/concepts/permissions_reference
+            scope: "offline_access openid profile Files.ReadWrite.All",
             redirectURI: SheetSyncRedirect.microsoftURI,
             redirectScheme: SheetSyncRedirect.microsoftScheme,
             usesLoopbackRedirect: false,

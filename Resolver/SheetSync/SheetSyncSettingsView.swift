@@ -153,10 +153,14 @@ private struct ProviderSetupSection: View {
             step(3, "Under \"Redirect URI\", choose platform \"Mobile and desktop applications\" and paste this exact value:")
             copyableValue("resolver-msauth://auth")
 
-            step(4, "Go to \"API permissions\" → \"Add a permission\" → \"Microsoft Graph\" → \"Delegated permissions\" → search for and check \"Files.ReadWrite\" → \"Add permissions\".")
+            step(4, "Go to \"API permissions\" → \"Add a permission\" → \"Microsoft Graph\" → \"Delegated permissions\" → search for and check \"Files.ReadWrite.All\" (not the plain \"Files.ReadWrite\" — that one only covers files you personally own, not ones shared with you via a link) → \"Add permissions\", then click \"Grant admin consent\" at the top of that page.")
             step(5, "Go back to \"Overview\" and copy the \"Application (client) ID\" shown there — paste it into the field below.")
 
             Text("Already created the app as single-tenant and seeing \"AADSTS50194\"? No need to start over — open the app → \"Authentication\" → change \"Supported account types\" to the multitenant option above → Save.")
+                .font(.caption)
+                .foregroundColor(.orange)
+
+            Text("Seeing \"HTTP 403 accessDenied\" when linking a sheet despite a successful sign-in? The app permission is Files.ReadWrite instead of Files.ReadWrite.All — add the .All permission above, grant admin consent again, then Sign Out and Test Sign-In again here so the new permission is actually included in your token.")
                 .font(.caption)
                 .foregroundColor(.orange)
 
