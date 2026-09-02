@@ -20,6 +20,14 @@ struct ClipData: Codable, Identifiable, Equatable {
         get { dict["Resolve Unique ID"] }
         set { dict["Resolve Unique ID"] = newValue }
     }
+    /// Soft-delete flag set from the sync review windows when a shot is no longer found on the
+    /// other side (e.g. deleted in Resolve) and the user confirms it should be marked removed.
+    /// Never actually removes the row from the master list — only flags it (struck-through in
+    /// the UI) so the decision stays reversible.
+    var isRemoved: Bool {
+        get { dict["Removed"] == "true" }
+        set { dict["Removed"] = newValue ? "true" : nil }
+    }
     var tcIn: String { get { dict["TC In"] ?? "" } set { dict["TC In"] = newValue } }
     var tcOut: String { get { dict["TC Out"] ?? "" } set { dict["TC Out"] = newValue } }
     var sourceTcIn: String { get { dict["Source TC In"] ?? "" } set { dict["Source TC In"] = newValue } }

@@ -92,11 +92,20 @@ All scripts talk to Resolve through `DaVinciResolveScript`, loaded from
   implementation has a custom decoder to stay backward-compatible with older saved JSON that used discrete
   keys instead of `dict`.
 - **`MergeManager`** (`MergeManager.swift`) implements the diff/merge between the project's master `[ClipData]`
-  and a freshly imported list (from CSV or from re-indexing Resolve), keyed by a user-selectable
-  `MergeKeyOption` (clip name, start TC, source in, or DaVinci unique ID). It classifies each imported clip as
-  `.identical` / `.modified` / `.new` and `applyMerge` writes selected changes back into the master list,
-  preserving the clip's stable `id` and any user-renamed `vfxName` on modified clips. `MergeReviewView` is the
-  UI for reviewing/selecting these diffs before applying.
+  and a freshly imported/fetched list (DaVinci Resolve index, CSV, or a linked Sheet Sync provider).
+  `compareColumnAware` matches each imported clip to a master clip in two passes — first the cheap, precise
+  exact-signal tiers (Resolve Unique ID → source range → source trim → clip name, reconform-aware), then a
+  generic column-overlap scorer for whatever's left (every remaining pair scores by how many dict columns
+  agree, assigned highest-score-first) — so a shot survives a rename/retrim as long as it still shares enough
+  other columns, without a manual "force this field" override. Unmatched imports become `.new` (with
+  near-miss `candidateMasterClips` to seed manual relinking); `MergeManager.missingItems` wraps master clips
+  no import claimed as `.missing` (used only by the one-way DaVinci/CSV import flow — a shot Resolve no
+  longer has is a discrepancy, resolved either by dismissing it or flagging it `ClipData.isRemoved`, a
+  reversible soft-delete, never an actual row deletion). `applyMerge` writes each item's per-column
+  `fieldWinners` decision into the master list, skipping anything not yet `isResolved`; `quickMerge` is a
+  no-review variant for the menu-bar quick-reindex shortcut. `SyncReviewView` is the one shared review window
+  (DaVinci/CSV import and Sheet Sync's "Compare Now" both present it) for resolving matches, relinking, and
+  per-column conflicts before applying — see its own doc comment for the full model.
 - **`CrashManager`** (`CrashManager.swift`) is a singleton that writes a lock file on session start
   (`Application Support/Resolver/app.lock`) and checks for it on next launch to detect unclean shutdowns,
   surfacing the most recent log via `CrashReportView`. It also owns log-file creation used by `PyScriptRunner`.

@@ -65,10 +65,12 @@ struct SheetSyncView: View {
             Button("OK", role: .cancel) { }
         } message: { Text(errorMessage) }
         .sheet(isPresented: $showReview) {
-            SheetSyncReviewView(
+            SyncReviewView(
                 mergeItems: $reviewMergeItems,
+                allMasterClips: projectManager.currentMasterList,
+                sourceLabel: (linkedProviderKind ?? selectedProvider).displayName,
+                supportsPush: true,
                 pushCandidates: $reviewPushCandidates,
-                providerName: (linkedProviderKind ?? selectedProvider).displayName,
                 onApply: {
                     showReview = false
                     applySync()
@@ -234,9 +236,9 @@ struct SheetSyncView: View {
                 resolvedSheetName = result.sheetName
 
                 let remoteClips = result.rows.map { ClipData(dict: $0) }
-                let items = MergeManager.smartCompare(master: projectManager.currentMasterList, imported: remoteClips)
-                let matchedMasterIds = Set(items.compactMap { $0.masterClip?.id })
-                let localOnly = projectManager.currentMasterList.filter { !matchedMasterIds.contains($0.id) }
+                let master = projectManager.currentMasterList
+                let items = MergeManager.compareColumnAware(master: master, imported: remoteClips)
+                let localOnly = MergeManager.unclaimedMasterClips(master: master, mergeItems: items)
 
                 reviewMergeItems = items
                 reviewPushCandidates = localOnly.map { PushCandidate(clip: $0) }
@@ -256,8 +258,9 @@ struct SheetSyncView: View {
     // MARK: - Apply
 
     private func applySync() {
-        // Pull: everything marked "use remote" — MergeManager.applyMerge only touches
-        // selected==true items, exactly matching the review's "Use <Provider>" choice.
+        // Pull: apply every resolved field decision into the master list — MergeManager.applyMerge
+        // takes the incoming value for any field the review resolved that way, and keeps the local
+        // value otherwise.
         let oldList = projectManager.currentMasterList
         var newMaster = projectManager.currentMasterList
         MergeManager.applyMerge(master: &newMaster, mergeItems: reviewMergeItems)
@@ -268,15 +271,17 @@ struct SheetSyncView: View {
             }
         }
 
-        // Push: local-only rows kept selected, plus "modified" rows where the user chose to keep
-        // the local value (selected == false here means "don't take remote's value" — so the
-        // local value needs to be written back out to the sheet instead).
+        // Push: local-only rows kept selected, plus any resolved conflict where at least one
+        // field kept the local value — that field needs writing back out to the sheet so it
+        // converges to the same merged row Resolver now has (per-field, not whole-row-only).
         var rowsToPush: [[String: String]] = []
         for candidate in reviewPushCandidates where candidate.selected {
             rowsToPush.append(sheetRow(for: candidate.clip))
         }
-        for item in reviewMergeItems where item.state == .modified && !item.selected {
-            if let master = item.masterClip { rowsToPush.append(sheetRow(for: master)) }
+        for item in reviewMergeItems where item.state == .modified {
+            guard item.fieldWinners.values.contains(.master), let masterClip = item.masterClip,
+                  let merged = newMaster.first(where: { $0.id == masterClip.id }) else { continue }
+            rowsToPush.append(sheetRow(for: merged))
         }
 
         guard !rowsToPush.isEmpty, let kind = linkedProviderKind, let link = project.sheetSyncLink else { return }

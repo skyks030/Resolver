@@ -312,8 +312,7 @@ struct DropDownMenu: View {
                  if let project = projectManager.currentProject {
                      let imported = projectManager.prepareImportedClips(clips, projectId: project.id)
                      var newMaster = projectManager.currentMasterList
-                     let items = MergeManager.compare(master: newMaster, imported: imported)
-                     MergeManager.applyMerge(master: &newMaster, mergeItems: items)
+                     MergeManager.quickMerge(master: &newMaster, imported: imported)
                      projectManager.updateMasterList(with: newMaster, sceneMarkers: markers)
                  } else {
                      showAlert("CSV Output:\n" + clips.map { $0.vfxName }.joined(separator: ","))
@@ -344,8 +343,7 @@ struct DropDownMenu: View {
             if let project = projectManager.currentProject {
                 let imported = projectManager.prepareImportedClips(clips, projectId: project.id)
                 var newMaster = projectManager.currentMasterList
-                let items = MergeManager.compare(master: newMaster, imported: imported)
-                MergeManager.applyMerge(master: &newMaster, mergeItems: items)
+                MergeManager.quickMerge(master: &newMaster, imported: imported)
                 projectManager.updateMasterList(with: newMaster)
             } else {
                 showAlert("CSV Output:\n" + clips.map { $0.vfxName }.joined(separator: ","))

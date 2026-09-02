@@ -41,9 +41,7 @@ struct ProjectExportView: View {
     
     @State private var showMergeReview = false
     @State private var pendingMergeItems: [MergeItem] = []
-    @State private var pendingImportedClips: [ClipData] = []
     @State private var pendingSceneMarkers: [MarkerData] = []
-    @State private var currentMergeKey: MergeKeyOption = .smart
     
     // Scene Manager & Generator States
     @State private var showSceneManager = false
@@ -455,29 +453,33 @@ struct ProjectExportView: View {
         
         // Merge Review Sheet (remains a sheet for consistency)
         .sheet(isPresented: $showMergeReview) {
-            MergeReviewView(mergeItems: $pendingMergeItems, mergeKey: $currentMergeKey) {
-                // Confirm
-                let oldList = projectManager.currentMasterList
-                var newMaster = projectManager.currentMasterList
-                MergeManager.applyMerge(master: &newMaster, mergeItems: pendingMergeItems)
+            SyncReviewView(
+                mergeItems: $pendingMergeItems,
+                allMasterClips: projectManager.currentMasterList,
+                sourceLabel: "DaVinci Resolve / CSV Import",
+                supportsPush: false,
+                pushCandidates: .constant([]),
+                onApply: {
+                    let oldList = projectManager.currentMasterList
+                    var newMaster = projectManager.currentMasterList
+                    MergeManager.applyMerge(master: &newMaster, mergeItems: pendingMergeItems)
 
-                // Only pass markers if it was a Resolve Index (not a CSV import)
-                if !pendingSceneMarkers.isEmpty {
-                    projectManager.updateMasterList(with: newMaster, sceneMarkers: pendingSceneMarkers)
-                } else {
-                    projectManager.updateMasterList(with: newMaster)
-                }
-                projectManager.registerUndo(\.currentMasterList, actionName: "Import Merge", from: oldList) {
-                    self.projectManager.saveMasterList()
-                }
+                    // Only pass markers if it was a Resolve Index (not a CSV import)
+                    if !pendingSceneMarkers.isEmpty {
+                        projectManager.updateMasterList(with: newMaster, sceneMarkers: pendingSceneMarkers)
+                    } else {
+                        projectManager.updateMasterList(with: newMaster)
+                    }
+                    projectManager.registerUndo(\.currentMasterList, actionName: "Import Merge", from: oldList) {
+                        self.projectManager.saveMasterList()
+                    }
 
-                showMergeReview = false
-            } onCancel: {
-                showMergeReview = false
-            }
-            .onChange(of: currentMergeKey) { newKey in
-                pendingMergeItems = MergeManager.compare(master: projectManager.currentMasterList, imported: pendingImportedClips, mergeKey: newKey)
-            }
+                    showMergeReview = false
+                },
+                onCancel: {
+                    showMergeReview = false
+                }
+            )
         }
         
         // DaVinci Import Sheet
@@ -1227,9 +1229,18 @@ struct ProjectExportView: View {
                         alignment: .trailing
                     )
                 }
+
+                if clipBinding.wrappedValue.isRemoved {
+                    Button("Restore") { restoreRemovedClip(id: clipBinding.wrappedValue.id) }
+                        .controlSize(.small)
+                        .font(.caption)
+                        .padding(.leading, 8)
+                }
             }
             .padding(.horizontal)
             .padding(.vertical, 4)
+            .strikethrough(clipBinding.wrappedValue.isRemoved)
+            .opacity(clipBinding.wrappedValue.isRemoved ? 0.5 : 1.0)
             Divider()
         }
     }
@@ -1429,12 +1440,30 @@ struct ProjectExportView: View {
         return csv
     }
 
+    /// Reverses a "Mark Removed" decision made in the sync review window — the row was only ever
+    /// flagged, never deleted, so this just clears the flag again.
+    private func restoreRemovedClip(id: UUID) {
+        guard let idx = projectManager.currentMasterList.firstIndex(where: { $0.id == id }) else { return }
+        let oldList = projectManager.currentMasterList
+        projectManager.currentMasterList[idx].isRemoved = false
+        projectManager.saveMasterList()
+        projectManager.registerUndo(\.currentMasterList, actionName: "Restore Shot", from: oldList) {
+            self.projectManager.saveMasterList()
+        }
+    }
+
     private func startMergeReview(importedClips: [ClipData], markers: [MarkerData]) {
         guard let project = projectManager.currentProject else { return }
         let preprocessed = projectManager.prepareImportedClips(importedClips, projectId: project.id)
-        
-        self.pendingImportedClips = preprocessed
-        self.pendingMergeItems = MergeManager.compare(master: projectManager.currentMasterList, imported: preprocessed, mergeKey: currentMergeKey)
+
+        let master = projectManager.currentMasterList
+        var items = MergeManager.compareColumnAware(master: master, imported: preprocessed)
+        // DaVinci/CSV import is a one-way read of "what currently exists" — a master shot this
+        // import doesn't see at all is a discrepancy too (it may have been deleted in Resolve),
+        // not something to silently leave untouched.
+        items += MergeManager.missingItems(master: master, mergeItems: items)
+
+        self.pendingMergeItems = items
         self.pendingSceneMarkers = markers
         self.showMergeReview = true
     }

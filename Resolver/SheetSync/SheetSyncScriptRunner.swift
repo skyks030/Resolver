@@ -1,5 +1,19 @@
 import Foundation
 
+enum SheetSyncError: LocalizedError {
+    case noResponse
+    case remote(String)
+    case unexpected
+
+    var errorDescription: String? {
+        switch self {
+        case .noResponse: return "No response from the sync script. Check Debug Mode for details."
+        case .remote(let message): return message
+        case .unexpected: return "Unexpected response from the sync script. Check Debug Mode for details."
+        }
+    }
+}
+
 // Shared result shape for every Resolve/Tools/sheet_sync.py action — only the fields relevant to
 // the action that was actually run get populated.
 struct SheetSyncScriptResult {
