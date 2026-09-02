@@ -113,12 +113,21 @@ def build_header(existing_values, rows, column_order=None):
 
 
 def build_id_index(header, existing_values):
+    """Maps each existing row's UPSERT_KEY_COLUMN value to its 1-indexed data row. Every raw cell
+    value is coerced through `str()` before comparing — both Excel and Google Sheets can hand a
+    cell back as a native number/bool instead of the original text (e.g. Microsoft Graph's own
+    docs note it "may remove leading zeros... and convert codes like '5E2' into the number 500"),
+    so a VFX Name that merely *looks* numeric would otherwise never match the plain string Swift
+    sends, and get silently appended as a duplicate row forever instead of updating in place.
+    `values_to_rows` (the fetch/compare path) already does this same coercion; this just makes
+    the write/upsert path consistent with it."""
     if UPSERT_KEY_COLUMN not in header:
         return {}
     id_col_idx = header.index(UPSERT_KEY_COLUMN)
     id_row_index = {}
     for i, raw_row in enumerate(existing_values[1:] if existing_values else [], start=1):
-        rid = raw_row[id_col_idx] if id_col_idx < len(raw_row) else None
+        raw_value = raw_row[id_col_idx] if id_col_idx < len(raw_row) else None
+        rid = str(raw_value) if raw_value not in (None, "") else None
         if rid:
             id_row_index[rid] = i
     return id_row_index
@@ -241,6 +250,17 @@ def ms_fetch(link, sheet_name, token):
     return values_to_rows(result.get("values", [])), sheet_name
 
 
+def text_number_format(values_2d):
+    """A numberFormat grid matching `values_2d`'s shape, forcing every written cell to Excel's
+    literal "Text" format ("@") — sent alongside `values` in the same PATCH, per Microsoft's
+    documented pattern for exactly this. Without it, Excel silently reinterprets some written
+    text as a different type on its own (their own docs: it "may remove leading zeros... and
+    convert codes like '5E2' into the number 500") — which doesn't just show the wrong value, it
+    also permanently breaks this script's own text-based row matching on the *next* sync, since
+    the cell no longer contains the string that was actually written (see build_id_index)."""
+    return [["@"] * len(row) for row in values_2d]
+
+
 def ms_write(link, sheet_name, rows, token, column_order=None):
     log("Resolving Excel share link via Microsoft Graph...")
     drive_id, item_id = ms_resolve_drive_item(link, token)
@@ -259,18 +279,20 @@ def ms_write(link, sheet_name, rows, token, column_order=None):
 
     if plan["header"] is not None:
         address = f"A1:{col_letter(len(plan['header']))}1"
-        http_json("PATCH", range_url(address), token, body={"values": [plan["header"]]})
+        grid = [plan["header"]]
+        http_json("PATCH", range_url(address), token, body={"values": grid, "numberFormat": text_number_format(grid)})
 
     for row_number, values in plan["updates"]:
         address = f"A{row_number}:{col_letter(len(values))}{row_number}"
-        http_json("PATCH", range_url(address), token, body={"values": [values]})
+        grid = [values]
+        http_json("PATCH", range_url(address), token, body={"values": grid, "numberFormat": text_number_format(grid)})
 
     if plan["appended"]:
         start = plan["append_start_row"]
         end = start + len(plan["appended"]) - 1
         width = max(len(r) for r in plan["appended"])
         address = f"A{start}:{col_letter(width)}{end}"
-        http_json("PATCH", range_url(address), token, body={"values": plan["appended"]})
+        http_json("PATCH", range_url(address), token, body={"values": plan["appended"], "numberFormat": text_number_format(plan["appended"])})
 
     log(f"Wrote {len(plan['updates'])} updated + {len(plan['appended'])} new row(s) to '{sheet_name}'"
         f"{' (header widened)' if plan['header'] is not None else ''}.")
