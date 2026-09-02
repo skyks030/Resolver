@@ -98,6 +98,7 @@ def main():
     spec = importlib.util.spec_from_file_location("DaVinciResolveScript", sdk_file)
     dvr = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(dvr)
+    import DaVinciResolveScript as dvr
     resolve = dvr.scriptapp("Resolve")
     if not resolve:
         fail("Could not connect to DaVinci Resolve.")
