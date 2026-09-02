@@ -127,7 +127,7 @@ struct MarkerData: Codable, Identifiable {
     }
 }
 
-struct SceneData: Codable, Identifiable {
+struct SceneData: Codable, Identifiable, Equatable {
     var id: UUID = UUID()
     var name: String
     var startTC: String
@@ -221,6 +221,12 @@ struct Project: Codable, Identifiable {
     var colorGroupsActive: Bool? = false
     var vfxMarkersActive: Bool? = false
     var sceneMarkersActive: Bool? = false
+
+    // Sheet Sync: a linked Excel Online (OneDrive for Business/SharePoint) or Google Sheets
+    // document this project's master list is periodically compared against. See SheetSyncView.
+    var sheetSyncProvider: String? = nil // "microsoft" or "google"
+    var sheetSyncLink: String? = nil // the pasted share/document URL
+    var sheetSyncSheetName: String? = nil // nil = first sheet/worksheet
 }
 
 struct ProjectStore: Codable {
@@ -244,7 +250,39 @@ class ProjectManager: ObservableObject {
     @Published var currentMasterList: [ClipData] = []
     @Published var currentScenes: [SceneData] = []
     @Published var currentEpisodes: [EpisodeData] = []
-    
+
+    // MARK: - Undo/Redo
+
+    // Set once by the root view (ProjectExportView) from its `@Environment(\.undoManager)`. Every
+    // local data-mutating action in the app registers its undo/redo through this — see
+    // `registerUndo` below. Nil before that wiring happens (or if run headless), in which case
+    // registration is simply a no-op — nothing crashes, edits just aren't undoable yet.
+    weak var undoManager: UndoManager?
+
+    // Snapshot-based undo+redo for a whole `ProjectManager` property. Call this AFTER performing
+    // and persisting a mutation: `oldValue` is what this undo step restores; the value already in
+    // place (captured here, before it's overwritten) becomes what the auto-registered redo
+    // re-applies. Registering the inverse action *from inside* the undo handler is the standard
+    // Cocoa "toggle" pattern — it's what makes redo work via the same UndoManager stack without
+    // any separate redo bookkeeping. `persist` is whichever save function already exists for this
+    // property (e.g. `saveMasterList`), so undo/redo always ends up written to disk exactly like
+    // a normal edit would.
+    func registerUndo<Value>(
+        _ keyPath: ReferenceWritableKeyPath<ProjectManager, Value>,
+        actionName: String,
+        from oldValue: Value,
+        persist: @escaping () -> Void
+    ) {
+        guard let undoManager else { return }
+        let redoValue = self[keyPath: keyPath]
+        undoManager.registerUndo(withTarget: self) { target in
+            target[keyPath: keyPath] = oldValue
+            persist()
+            target.registerUndo(keyPath, actionName: actionName, from: redoValue, persist: persist)
+        }
+        undoManager.setActionName(actionName)
+    }
+
     // Helper to get formatted date
     static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -592,6 +630,18 @@ class ProjectManager: ObservableObject {
     func updateColorGroupsActive(projectId: UUID, active: Bool) {
         guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
         projects[index].colorGroupsActive = active
+
+        if currentProject?.id == projectId {
+            currentProject = projects[index]
+        }
+        save()
+    }
+
+    func updateSheetSyncLink(projectId: UUID, provider: String?, link: String?, sheetName: String?) {
+        guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[index].sheetSyncProvider = provider
+        projects[index].sheetSyncLink = link
+        projects[index].sheetSyncSheetName = sheetName
 
         if currentProject?.id == projectId {
             currentProject = projects[index]

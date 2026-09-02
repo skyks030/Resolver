@@ -3,6 +3,10 @@ import UniformTypeIdentifiers
 
 struct ProjectExportView: View {
     @EnvironmentObject var projectManager: ProjectManager
+    // Undo/Redo: this window's UndoManager, handed off to projectManager so every mutating
+    // method/view (including the sheets presented from this window) can register undo actions
+    // through it — see ProjectManager.registerUndo.
+    @Environment(\.undoManager) private var undoManager
     // Scene Filter
     @State private var selectedScenePrefix: String? = nil
     
@@ -24,6 +28,10 @@ struct ProjectExportView: View {
     struct CellID: Hashable { let clipId: UUID; let col: String }
     @State private var editingCell: CellID? = nil
     @FocusState private var focusedField: CellID?
+    // Snapshot of the master list taken the moment a cell starts editing, so the undo action
+    // registered when editing ends restores the value from before this edit — not one keystroke
+    // at a time (the TextField mutates the model live on every keystroke).
+    @State private var cellEditSnapshot: [ClipData]? = nil
     @State private var showDeleteShotsAlert = false
     @State private var editingHeader: String? = nil
     @FocusState private var focusedHeader: String?
@@ -51,6 +59,7 @@ struct ProjectExportView: View {
     @State private var selectedThumbnailClipIds: Set<UUID> = []
     @State private var showImportDataSheet = false
     @State private var showExportDataSheet = false
+    @State private var showSheetSync = false
     
     @State private var isEditingMasterlist = false
     @State private var selectedForDelete: Set<UUID> = []
@@ -256,8 +265,7 @@ struct ProjectExportView: View {
                     }
                     .background(Color.clear.contentShape(Rectangle()).onTapGesture {
                         if isEditingMasterlist {
-                            editingCell = nil
-                            focusedField = nil
+                            commitEditingCell()
                             finishHeaderEditing()
                         }
                     })
@@ -389,13 +397,18 @@ struct ProjectExportView: View {
         }
         .alert("Delete Selected Shots?", isPresented: $showDeleteShotsAlert) {
             Button("Delete", role: .destructive) {
+                let oldList = projectManager.currentMasterList
+                let deletedCount = selectedForDelete.count
                 projectManager.currentMasterList.removeAll { selectedForDelete.contains($0.id) }
                 projectManager.saveMasterList()
+                projectManager.registerUndo(\.currentMasterList, actionName: "Delete \(deletedCount) Shot\(deletedCount == 1 ? "" : "s")", from: oldList) {
+                    self.projectManager.saveMasterList()
+                }
                 selectedForDelete.removeAll()
             }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("Are you sure you want to delete the selected \(selectedForDelete.count) VFX shots? This cannot be undone.")
+            Text("Are you sure you want to delete the selected \(selectedForDelete.count) VFX shots? You can undo this with ⌘Z.")
         }
         .alert("Delete Column", isPresented: $showDeleteColumnAlert) {
             Button("Delete", role: .destructive) {
@@ -444,16 +457,20 @@ struct ProjectExportView: View {
         .sheet(isPresented: $showMergeReview) {
             MergeReviewView(mergeItems: $pendingMergeItems, mergeKey: $currentMergeKey) {
                 // Confirm
+                let oldList = projectManager.currentMasterList
                 var newMaster = projectManager.currentMasterList
                 MergeManager.applyMerge(master: &newMaster, mergeItems: pendingMergeItems)
-                
+
                 // Only pass markers if it was a Resolve Index (not a CSV import)
                 if !pendingSceneMarkers.isEmpty {
                     projectManager.updateMasterList(with: newMaster, sceneMarkers: pendingSceneMarkers)
                 } else {
                     projectManager.updateMasterList(with: newMaster)
                 }
-                
+                projectManager.registerUndo(\.currentMasterList, actionName: "Import Merge", from: oldList) {
+                    self.projectManager.saveMasterList()
+                }
+
                 showMergeReview = false
             } onCancel: {
                 showMergeReview = false
@@ -531,7 +548,12 @@ struct ProjectExportView: View {
         .sheet(isPresented: $showEpisodeManager) {
             EpisodeManagementView(project: projectManager.currentProject!)
         }
-        
+
+        // Sheet Sync (Excel Online / Google Sheets)
+        .sheet(isPresented: $showSheetSync) {
+            SheetSyncView(project: projectManager.currentProject!)
+        }
+
         // VFX Name Generator Sheet
         .sheet(isPresented: $showVfxNameGenerator) {
             VfxNameGeneratorView(project: projectManager.currentProject!)
@@ -543,6 +565,7 @@ struct ProjectExportView: View {
                 vfxThumbnailTrack = project.vfxThumbnailTrackIndex ?? "1"
                 hasThumbnailsCache = hasThumbnails()
             }
+            projectManager.undoManager = undoManager
         }
         .onChange(of: projectManager.currentProject?.id) { _ in
             if let project = projectManager.currentProject {
@@ -551,6 +574,9 @@ struct ProjectExportView: View {
                 selectedScenePrefix = nil
                 hasThumbnailsCache = hasThumbnails()
             }
+        }
+        .onChange(of: undoManager) { newValue in
+            projectManager.undoManager = newValue
         }
     }
     
@@ -672,6 +698,11 @@ struct ProjectExportView: View {
                 .liquidGlassButton(prominent: false)
                 .controlSize(.large)
                 .fixedSize()
+
+                Button { showSheetSync = true } label: { Label("Sheet Sync", systemImage: "arrow.triangle.2.circlepath").fixedSize() }
+                .liquidGlassButton(prominent: false)
+                .controlSize(.large)
+                .fixedSize()
             }
             .layoutPriority(2) // Ensure these don't get squished
             
@@ -727,18 +758,22 @@ struct ProjectExportView: View {
                     }
                     customColumnVisibility[newName] = true
                     if !columnOrder.contains(newName) { columnOrder.append(newName) }
-                    
+
+                    let oldList = projectManager.currentMasterList
                     if !projectManager.currentMasterList.isEmpty {
                         for i in 0..<projectManager.currentMasterList.count {
                             projectManager.currentMasterList[i].dict[newName] = ""
                         }
                     }
                     projectManager.saveMasterList()
+                    projectManager.registerUndo(\.currentMasterList, actionName: "Add Column", from: oldList) {
+                        self.projectManager.saveMasterList()
+                    }
                 }) {
                     Label("Add Column", systemImage: "plus.table.column")
                 }
                 .liquidGlassButton(prominent: false)
-                
+
                 Button(action: {
                     var initialDict: [String: String] = [
                         "VFX Name": "New Shot",
@@ -748,12 +783,16 @@ struct ProjectExportView: View {
                         "Source TC In": "",
                         "Source TC Out": ""
                     ]
-                    for col in availableCustomColumns { 
+                    for col in availableCustomColumns {
                         if initialDict[col] == nil { initialDict[col] = "" }
                     }
                     let newClip = ClipData(dict: initialDict)
+                    let oldList = projectManager.currentMasterList
                     projectManager.currentMasterList.append(newClip)
                     projectManager.saveMasterList() // so it persists instantly
+                    projectManager.registerUndo(\.currentMasterList, actionName: "Add Clip", from: oldList) {
+                        self.projectManager.saveMasterList()
+                    }
                 }) {
                     Label("Add Clip", systemImage: "plus.square.on.square")
                 }
@@ -1000,6 +1039,31 @@ struct ProjectExportView: View {
         getFilteredIndices(clips: projectManager.currentMasterList)
     }
     
+    // MARK: - Undo/Redo: cell editing
+
+    // Begins editing a cell, remembering the master list as it was right before — this is what
+    // the undo action registered in commitEditingCell() restores to, so a whole edit (however
+    // many keystrokes) undoes in one step rather than one character at a time.
+    private func beginEditingCell(_ id: CellID) {
+        cellEditSnapshot = projectManager.currentMasterList
+        editingCell = id
+        focusedField = id
+    }
+
+    // Ends editing (submit, losing focus, or tapping outside) and registers the undo step, but
+    // only if the value actually changed — clicking into a cell and back out without typing
+    // anything shouldn't leave a no-op entry on the undo stack.
+    private func commitEditingCell() {
+        if let snapshot = cellEditSnapshot, snapshot != projectManager.currentMasterList {
+            projectManager.saveMasterList()
+            projectManager.registerUndo(\.currentMasterList, actionName: "Edit Cell", from: snapshot) {
+                self.projectManager.saveMasterList()
+            }
+        }
+        cellEditSnapshot = nil
+        editingCell = nil
+    }
+
     // Resolves which registered episode a given Record TC (optionally with an explicit "Episode"
     // tag, e.g. from a clip's dict) belongs to, so callers can open the right timeline before
     // acting on it — a Resolve position jump, a marker, a color group, a thumbnail grab. An
@@ -1093,10 +1157,10 @@ struct ProjectExportView: View {
                             ))
                             .textFieldStyle(.plain)
                             .focused($focusedField, equals: cellId)
-                            .onSubmit { editingCell = nil }
+                            .onSubmit { commitEditingCell() }
                             .onChange(of: focusedField) { newValue in
                                 if newValue != cellId && editingCell == cellId {
-                                    editingCell = nil
+                                    commitEditingCell()
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1130,8 +1194,7 @@ struct ProjectExportView: View {
                                     .contentShape(Rectangle())
                                     .onTapGesture {
                                         if isEditingMasterlist {
-                                            editingCell = cellId
-                                            focusedField = cellId
+                                            beginEditingCell(cellId)
                                         }
                                     }
                                     .background(isEditingMasterlist && editingCell == cellId ? Color.accentColor.opacity(0.1) : Color.clear)
@@ -1207,12 +1270,16 @@ struct ProjectExportView: View {
     // Episode "1" in one step).
     private func applyBatchEdit(column: String, value: String) {
         guard !column.isEmpty else { return }
+        let oldList = projectManager.currentMasterList
         for i in projectManager.currentMasterList.indices {
             if selectedForDelete.contains(projectManager.currentMasterList[i].id) {
                 projectManager.currentMasterList[i].dict[column] = value
             }
         }
         projectManager.saveMasterList()
+        projectManager.registerUndo(\.currentMasterList, actionName: "Batch Edit \(column)", from: oldList) {
+            self.projectManager.saveMasterList()
+        }
     }
 
     private func getFilteredIndices(clips: [ClipData]) -> [Int] {
@@ -1809,6 +1876,7 @@ struct ProjectExportView: View {
         let trimmed = headerEditText.trimmingCharacters(in: .whitespaces)
         
         if !trimmed.isEmpty && trimmed != oldCol && !availableCustomColumns.contains(trimmed) {
+            let oldList = projectManager.currentMasterList
             for i in 0..<projectManager.currentMasterList.count {
                 if let val = projectManager.currentMasterList[i].dict[oldCol] {
                     projectManager.currentMasterList[i].dict[trimmed] = val
@@ -1818,7 +1886,10 @@ struct ProjectExportView: View {
                 }
             }
             projectManager.saveMasterList()
-            
+            projectManager.registerUndo(\.currentMasterList, actionName: "Rename Column", from: oldList) {
+                self.projectManager.saveMasterList()
+            }
+
             if let idx = columnOrder.firstIndex(of: oldCol) { columnOrder[idx] = trimmed }
             if customColumnVisibility[oldCol] == true { customColumnVisibility[trimmed] = true }
             customColumnVisibility.removeValue(forKey: oldCol)

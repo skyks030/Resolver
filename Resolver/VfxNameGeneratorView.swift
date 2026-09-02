@@ -389,6 +389,7 @@ struct VfxNameGeneratorView: View {
     private func generateNames() {
         ConsoleLogger.shared.log("Starting VFX Name Generation...")
 
+        let oldMasterList = projectManager.currentMasterList
         var sceneCounters: [String: Int] = [:]
         var flatCounter = counterStart
         var generated = 0
@@ -444,6 +445,9 @@ struct VfxNameGeneratorView: View {
         if generated > 0 {
             ConsoleLogger.shared.log("Successfully generated \(generated) VFX Names!")
             projectManager.saveMasterList()
+            projectManager.registerUndo(\.currentMasterList, actionName: "Generate VFX Names", from: oldMasterList) {
+                self.projectManager.saveMasterList()
+            }
             generatedCount = generated
             showSuccess = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { dismiss() }

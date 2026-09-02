@@ -185,11 +185,18 @@ struct EpisodeManagementView: View {
         guard let idx = projectManager.currentEpisodes.firstIndex(where: { $0.id == episode.id }) else { return }
         let newIdx = idx + direction
         guard newIdx >= 0, newIdx < projectManager.currentEpisodes.count else { return }
+        let oldEpisodes = projectManager.currentEpisodes
         withAnimation(.easeInOut(duration: 0.25)) {
             projectManager.currentEpisodes.swapAt(idx, newIdx)
             renumberEpisodes()
         }
         projectManager.saveEpisodes()
+        // The List's `.animation(.default, value: projectManager.currentEpisodes)` picks up the
+        // undo/redo assignment too, so reordering via Cmd+Z/⌘⇧Z animates the same smooth way a
+        // manual move does — no special handling needed here beyond registering the snapshot.
+        projectManager.registerUndo(\.currentEpisodes, actionName: "Move Episode", from: oldEpisodes) {
+            self.projectManager.saveEpisodes()
+        }
     }
 
     // Episode numbers are never edited directly — they always mirror top-to-bottom position,
@@ -201,11 +208,15 @@ struct EpisodeManagementView: View {
     }
 
     private func deleteEpisode(_ episode: EpisodeData) {
+        let oldEpisodes = projectManager.currentEpisodes
         withAnimation(.easeInOut(duration: 0.25)) {
             projectManager.currentEpisodes.removeAll { $0.id == episode.id }
             renumberEpisodes()
         }
         projectManager.saveEpisodes()
+        projectManager.registerUndo(\.currentEpisodes, actionName: "Delete Episode", from: oldEpisodes) {
+            self.projectManager.saveEpisodes()
+        }
     }
 
     // MARK: - Indexing
