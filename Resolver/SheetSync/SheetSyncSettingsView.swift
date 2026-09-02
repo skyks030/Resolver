@@ -149,12 +149,16 @@ private struct ProviderSetupSection: View {
             step(1, "Open Microsoft Entra ID (this is Microsoft's free app-registration portal — a work/school or even a personal Microsoft account can create one; no paid subscription needed for this step itself).")
             portalButton("Open Microsoft Entra Portal", url: "https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade")
 
-            step(2, "Click \"New registration\". Give it any name (e.g. \"Resolver\"). Under \"Supported account types\" any option is fine.")
+            step(2, "Click \"New registration\". Give it any name (e.g. \"Resolver\"). Under \"Supported account types\" you MUST choose \"Accounts in any organizational directory (Any Microsoft Entra ID tenant – Multitenant)\" — Resolver signs in via the shared /common endpoint, which only single-tenant apps are blocked from using (Microsoft error AADSTS50194 if you pick \"this organizational directory only\" by mistake).")
             step(3, "Under \"Redirect URI\", choose platform \"Mobile and desktop applications\" and paste this exact value:")
             copyableValue("resolver-msauth://auth")
 
             step(4, "Go to \"API permissions\" → \"Add a permission\" → \"Microsoft Graph\" → \"Delegated permissions\" → search for and check \"Files.ReadWrite\" → \"Add permissions\".")
             step(5, "Go back to \"Overview\" and copy the \"Application (client) ID\" shown there — paste it into the field below.")
+
+            Text("Already created the app as single-tenant and seeing \"AADSTS50194\"? No need to start over — open the app → \"Authentication\" → change \"Supported account types\" to the multitenant option above → Save.")
+                .font(.caption)
+                .foregroundColor(.orange)
 
             Text("Note: the spreadsheet itself must live on OneDrive for Business or SharePoint — personal/consumer OneDrive isn't supported by Excel's workbook API (a Microsoft platform limitation, not a Resolver one).")
                 .font(.caption)
