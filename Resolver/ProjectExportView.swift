@@ -1486,7 +1486,6 @@ struct ProjectExportView: View {
             allMasterClips: projectManager.currentMasterList,
             sourceLabel: "DaVinci Resolve / CSV Import",
             supportsPush: false,
-            pushCandidates: .constant([]),
             ignoredDiffKeys: pendingIgnoredDiffKeys,
             onApply: {
                 let oldList = projectManager.currentMasterList

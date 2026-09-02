@@ -1,29 +1,20 @@
 import SwiftUI
 
-// One row of the master list that exists locally but wasn't matched to anything on the other
-// side — a candidate to push out. For Sheet Sync this is the whole story for a local-only row;
-// for the DaVinci/CSV import flow local-only rows are handled as `.missing` MergeItems instead
-// (see `MergeManager.missingItems`), so `pushCandidates` stays empty there.
-struct PushCandidate: Identifiable {
-    let id = UUID()
-    let clip: ClipData
-    var selected: Bool = true
-}
-
 // Shared review window for both the DaVinci Resolve/CSV import merge and Sheet Sync's "Compare
 // Now" — same layout, same matching model (MergeManager.compareColumnAware), so switching
-// between the two feels like the same tool: every shot found is listed, matches are green and
-// collapsible, anything the matcher couldn't confidently pair floats in an "Unlinked" pool for
-// manual relinking or explicit "declare as new", and every remaining per-column discrepancy is
-// resolved one direction or the other before Resync unlocks.
+// between the two feels like the same tool: every shot found is listed together (whether it
+// matched perfectly, still has a discrepancy, or couldn't be paired at all), anything the matcher
+// couldn't confidently pair floats in a "Needs a Match" pool — split by which side it came
+// from — for manual relinking or an explicit new/removed declaration, and every remaining
+// per-column discrepancy is resolved one direction or the other before Resync unlocks.
 struct SyncReviewView: View {
     @Binding var mergeItems: [MergeItem]
     let allMasterClips: [ClipData]
     let sourceLabel: String
-    /// true = Sheet Sync (bidirectional — local-only rows can be pushed out); false = DaVinci/CSV
-    /// import (one-way — local-only rows instead surface as `.missing` items in `mergeItems`).
+    /// true = Sheet Sync (bidirectional — a local-only shot can be pushed out to the remote
+    /// sheet); false = DaVinci/CSV import (one-way — a local-only shot can only be kept or
+    /// flagged removed, there's nowhere to push it to).
     let supportsPush: Bool
-    @Binding var pushCandidates: [PushCandidate]
     /// Columns never treated as a discrepancy in this review — e.g. "VFX Name" for a DaVinci
     /// Resolve import, which never carries one at all. Defaults to none (Sheet Sync's call site
     /// doesn't pass this — a spreadsheet can legitimately carry a real VFX Name).
@@ -37,6 +28,10 @@ struct SyncReviewView: View {
     // the list progressively narrow down to only what still needs attention.
     @State private var hideResolved = false
     @State private var relinkTarget: UUID? = nil
+    // Which "Needs a Match — VFX Master List" row's Link… button was pressed, to link it to an
+    // unmatched *remote* item instead (the mirror of `relinkTarget`, which links an unmatched
+    // remote item to a master clip).
+    @State private var relinkMasterTarget: UUID? = nil
     // Multi-select for the Conflicts grid — resolving one field for a shot that's part of the
     // current selection applies that same direction to the same column on every other selected
     // shot with a conflict there too (e.g. a batch VFX-Name rename affecting many shots at once).
@@ -55,31 +50,38 @@ struct SyncReviewView: View {
     // (nothing to compare against yet), just from opposite sides, so they're shown together up
     // top instead of the master-side half being buried among genuine field-level conflicts.
     private var unmatchedRemoteItems: [MergeItem] { mergeItems.filter { $0.state == .new } }
+    // Includes Sheet Sync's local-only shots too now (see MergeManager.missingItems and
+    // SheetSyncView.compareNow) — a shot the matcher can't currently pair up is the same kind of
+    // problem regardless of *why* nothing on the other side matches it.
     private var unmatchedMasterItems: [MergeItem] { mergeItems.filter { $0.state == .missing } }
-    // Conflicts now holds only pairs the matcher *did* successfully link but that still differ on
-    // some field — a materially different problem (resolve a value, not find a match).
-    private var conflictItems: [MergeItem] { mergeItems.filter { $0.state == .modified } }
-    private var matchedItems: [MergeItem] { mergeItems.filter { $0.state == .identical } }
+    // Every shot the matcher *did* successfully pair — shown together, in the same row-pair
+    // layout, whether it's a still-open conflict or a clean match, so resolving the last field on
+    // a conflict just turns it green in place rather than relocating it to a separate section.
+    private var comparedItems: [MergeItem] { mergeItems.filter { $0.state == .modified || $0.state == .identical } }
+    // Header-badge counts: "still needs a decision" vs. "currently clean" — both live-updating as
+    // fields get resolved, unlike `comparedItems` itself which never reorders/splits.
+    private var unresolvedConflictItems: [MergeItem] { mergeItems.filter { $0.state == .modified && !$0.isResolved } }
+    private var resolvedCompareItems: [MergeItem] { comparedItems.filter(\.isResolved) }
 
     /// `hideResolved`-filtered versions of the groups above — what actually gets rendered.
-    /// `matchedItems` are always resolved, so this is also what subsumed the old "Hide Matching"
-    /// behavior: turning it on empties that section along with everything else that's clean.
+    /// A fully-resolved compared item (identical, or a conflict with every field decided) is what
+    /// subsumed the old "Hide Matching" behavior: turning this on empties it out of the list
+    /// along with everything else that's clean.
     private func visible(_ items: [MergeItem]) -> [MergeItem] { hideResolved ? items.filter { !$0.isResolved } : items }
     private var visibleUnmatchedRemote: [MergeItem] { visible(unmatchedRemoteItems) }
     private var visibleUnmatchedMaster: [MergeItem] { visible(unmatchedMasterItems) }
-    private var visibleConflictItems: [MergeItem] { visible(conflictItems) }
-    private var visibleMatchedItems: [MergeItem] { visible(matchedItems) }
+    private var visibleComparedItems: [MergeItem] { visible(comparedItems) }
 
     private var allColumns: [String] {
         MergeManager.orderedColumns(for: mergeItems.flatMap { [$0.masterClip, $0.importedClip].compactMap { $0 } })
     }
 
-    /// `allColumns`, but with every column that has at least one still-visible conflict pulled
-    /// forward (right after VFX Name, which always leads) — so scanning left-to-right always
-    /// surfaces what still needs a decision before scrolling through untouched columns.
+    /// `allColumns`, but with every column that still has an unresolved conflict pulled forward
+    /// (right after VFX Name, which always leads) — so scanning left-to-right always surfaces
+    /// what still needs a decision before scrolling through untouched/already-resolved columns.
     private var displayColumns: [String] {
         let cols = allColumns
-        let conflictCols = Set(visibleConflictItems.flatMap(\.diffKeys))
+        let conflictCols = Set(unresolvedConflictItems.flatMap(\.diffKeys))
         var result: [String] = []
         if cols.contains("VFX Name") { result.append("VFX Name") }
         let rest = cols.filter { $0 != "VFX Name" }
@@ -115,14 +117,14 @@ struct SyncReviewView: View {
     }
 
     /// How many resolved items will push a change out to the remote sheet — Sheet Sync only
-    /// (DaVinci/CSV import has no remote to write back to). A `.modified` pair only counts here
-    /// if at least one of its fields was resolved toward "keep local" (`.master`) — previously
-    /// this was entirely missing from the (single, combined) count, which is why the footer could
-    /// show "0" even with many local-wins conflicts configured to push out.
+    /// (DaVinci/CSV import has no remote to write back to). A `.modified` pair counts if at least
+    /// one field was resolved toward "keep local" (`.master`); a `.missing` (local-only) shot
+    /// counts if resolved as "Push" (the Sheet Sync framing of `.keep` — see `missingRow`).
     private var remoteChangeCount: Int {
         guard supportsPush else { return 0 }
         let modifiedPushes = mergeItems.filter { $0.state == .modified && $0.fieldWinners.values.contains(.master) }.count
-        return modifiedPushes + pushCandidates.filter(\.selected).count
+        let missingPushes = mergeItems.filter { $0.state == .missing && $0.missingResolution == .keep }.count
+        return modifiedPushes + missingPushes
     }
 
     var body: some View {
@@ -133,12 +135,9 @@ struct SyncReviewView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     needsMatchSection
-                    conflictsSection
-                    if supportsPush { pushSection }
-                    matchedSection
+                    comparedSection
 
-                    if visibleUnmatchedRemote.isEmpty && visibleUnmatchedMaster.isEmpty && visibleConflictItems.isEmpty && visibleMatchedItems.isEmpty
-                        && (!supportsPush || pushCandidates.isEmpty) {
+                    if visibleUnmatchedRemote.isEmpty && visibleUnmatchedMaster.isEmpty && visibleComparedItems.isEmpty {
                         Group {
                             if hideResolved && !mergeItems.isEmpty {
                                 Text("Everything is resolved. Turn off \"Hide Resolved\" to review it again, or Resync below.")
@@ -158,8 +157,6 @@ struct SyncReviewView: View {
             footer
         }
         .frame(minWidth: 880, minHeight: 620)
-        .onAppear { reconcilePushCandidates() }
-        .onChange(of: mergeItems) { _ in reconcilePushCandidates() }
         .sheet(item: relinkBinding) { item in
             RelinkPickerSheet(
                 candidates: MergeManager.unclaimedMasterClips(master: allMasterClips, mergeItems: mergeItems),
@@ -168,14 +165,32 @@ struct SyncReviewView: View {
                 onCancel: { relinkTarget = nil }
             )
         }
+        .sheet(item: relinkMasterBinding) { item in
+            RelinkToRemoteSheet(
+                candidates: unmatchedRemoteItems,
+                displayName: { displayName(for: $0.importedClip) },
+                onPick: { remoteItem in
+                    link(itemId: remoteItem.id, to: item.masterClipForLink)
+                    relinkMasterTarget = nil
+                },
+                onCancel: { relinkMasterTarget = nil }
+            )
+        }
     }
 
-    // A small Identifiable wrapper so `.sheet(item:)` can present the picker for whichever
-    // unlinked item's Link button was pressed.
+    // Small Identifiable wrappers so `.sheet(item:)` can present the picker for whichever row's
+    // Link button was pressed.
     private var relinkBinding: Binding<IdentifiedMergeItem?> {
         Binding(
             get: { relinkTarget.flatMap { id in mergeItems.first { $0.id == id } }.map(IdentifiedMergeItem.init) },
             set: { relinkTarget = $0?.id }
+        )
+    }
+
+    private var relinkMasterBinding: Binding<IdentifiedMergeItem?> {
+        Binding(
+            get: { relinkMasterTarget.flatMap { id in mergeItems.first { $0.id == id } }.map(IdentifiedMergeItem.init) },
+            set: { relinkMasterTarget = $0?.id }
         )
     }
 
@@ -192,9 +207,9 @@ struct SyncReviewView: View {
                 let needsMatchCount = unmatchedRemoteItems.count + unmatchedMasterItems.count
                 Label("\(needsMatchCount) Needs Match", systemImage: "questionmark.circle.fill")
                     .foregroundColor(needsMatchCount == 0 ? .secondary : .orange)
-                Label("\(conflictItems.count) Conflicts", systemImage: "exclamationmark.triangle.fill")
-                    .foregroundColor(conflictItems.isEmpty ? .secondary : .red)
-                Label("\(matchedItems.count) Matched", systemImage: "checkmark.circle.fill")
+                Label("\(unresolvedConflictItems.count) Conflicts", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundColor(unresolvedConflictItems.isEmpty ? .secondary : .red)
+                Label("\(resolvedCompareItems.count) Matched", systemImage: "checkmark.circle.fill")
                     .foregroundColor(.green)
             }
             .font(.subheadline)
@@ -247,7 +262,8 @@ struct SyncReviewView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     if !visibleUnmatchedRemote.isEmpty {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Remote List").font(.caption).bold().foregroundColor(remoteColor)
+                            Text("Remote List (\(sourceLabel)) — not in VFX Master List")
+                                .font(.caption).bold().foregroundColor(remoteColor)
                             VStack(spacing: 0) {
                                 ForEach(visibleUnmatchedRemote) { item in
                                     unlinkedRow(item: item)
@@ -258,7 +274,8 @@ struct SyncReviewView: View {
                     }
                     if !visibleUnmatchedMaster.isEmpty {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("VFX Master List").font(.caption).bold().foregroundColor(masterColor)
+                            Text("VFX Master List — not in \(sourceLabel)")
+                                .font(.caption).bold().foregroundColor(masterColor)
                             VStack(spacing: 0) {
                                 ForEach(visibleUnmatchedMaster) { item in
                                     missingRow(item: item)
@@ -304,13 +321,13 @@ struct SyncReviewView: View {
         .padding(.vertical, 6)
     }
 
-    // MARK: - Conflicts
+    // MARK: - Compared Shots (matched + conflicts, together)
 
     @ViewBuilder
-    private var conflictsSection: some View {
-        if !visibleConflictItems.isEmpty {
-            section(title: "Conflicts — resolve each difference", systemImage: "exclamationmark.triangle.fill", color: .red) {
-                let selectedVisibleCount = selectedConflictIds.intersection(Set(visibleConflictItems.map(\.id))).count
+    private var comparedSection: some View {
+        if !visibleComparedItems.isEmpty {
+            section(title: "Compared Shots", systemImage: "arrow.left.arrow.right.circle.fill", color: .secondary) {
+                let selectedVisibleCount = selectedConflictIds.intersection(Set(visibleComparedItems.map(\.id))).count
                 if selectedVisibleCount > 0 {
                     HStack {
                         Text("\(selectedVisibleCount) selected — resolving a field applies it to all of them")
@@ -324,7 +341,7 @@ struct SyncReviewView: View {
                 ScrollView(.horizontal) {
                     VStack(alignment: .leading, spacing: 18) {
                         columnHeaderRow
-                        ForEach(visibleConflictItems) { item in
+                        ForEach(visibleComparedItems) { item in
                             conflictPair(itemId: item.id)
                         }
                     }
@@ -335,7 +352,7 @@ struct SyncReviewView: View {
 
     private func toggleConflictSelection(_ id: UUID) {
         if NSEvent.modifierFlags.contains(.shift), let anchor = lastSelectedConflictId {
-            let ids = visibleConflictItems.map(\.id)
+            let ids = visibleComparedItems.map(\.id)
             if let anchorIdx = ids.firstIndex(of: anchor), let clickedIdx = ids.firstIndex(of: id) {
                 let range = anchorIdx <= clickedIdx ? anchorIdx...clickedIdx : clickedIdx...anchorIdx
                 for i in range { selectedConflictIds.insert(ids[i]) }
@@ -371,6 +388,7 @@ struct SyncReviewView: View {
         let item = itemBinding(itemId)
         let cols = displayColumns
         let isSelected = selectedConflictIds.contains(itemId)
+        let isClean = item.wrappedValue.isResolved // .identical, or every field on a .modified pair decided
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Image(systemName: isSelected ? "checkmark.square.fill" : "square")
@@ -379,15 +397,20 @@ struct SyncReviewView: View {
                     .onTapGesture { toggleConflictSelection(itemId) }
                     .help("Select — shift-click to select a range. Resolving one field then applies it to every selected shot with a conflict there.")
                 Text(displayName(for: item.wrappedValue.importedClip)).bold()
+                if isClean {
+                    Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+                }
                 if let confidence = item.wrappedValue.matchConfidence {
                     Text("via \(confidence.label)").font(.caption2).foregroundColor(.secondary)
                 } else if let score = item.wrappedValue.matchColumnScore {
                     Text("via \(score) shared column\(score == 1 ? "" : "s")").font(.caption2).foregroundColor(.secondary)
                 }
-                Button("Accept All Incoming") { resolveAll(itemId: itemId, winner: .incoming) }
-                    .font(.caption).buttonStyle(.plain).foregroundColor(.accentColor)
-                Button("Keep All Local") { resolveAll(itemId: itemId, winner: .master) }
-                    .font(.caption).buttonStyle(.plain).foregroundColor(.accentColor)
+                if !item.wrappedValue.diffKeys.isEmpty {
+                    Button("Accept All Incoming") { resolveAll(itemId: itemId, winner: .incoming) }
+                        .font(.caption).buttonStyle(.plain).foregroundColor(.accentColor)
+                    Button("Keep All Local") { resolveAll(itemId: itemId, winner: .master) }
+                        .font(.caption).buttonStyle(.plain).foregroundColor(.accentColor)
+                }
                 Button { breakLink(itemId: itemId) } label: {
                     Label("Break Link", systemImage: "link.badge.plus")
                 }
@@ -407,9 +430,10 @@ struct SyncReviewView: View {
         }
         .padding(8)
         .liquidGlassPanel(cornerRadius: 8)
+        .background(isClean ? Color.green.opacity(0.06) : Color.clear)
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(isSelected ? Color.accentColor.opacity(0.6) : Color.clear, lineWidth: 2)
+                .strokeBorder(isSelected ? Color.accentColor.opacity(0.6) : (isClean ? Color.green.opacity(0.4) : Color.clear), lineWidth: 2)
         )
     }
 
@@ -486,7 +510,20 @@ struct SyncReviewView: View {
                 .strikethrough(resolution == .markRemoved)
                 .foregroundColor(resolution == .markRemoved ? .secondary : .primary)
             Spacer()
-            Button("Keep") { setMissingResolution(itemId: item.id, .keep) }
+            // Link across to an unmatched remote item, for when the matcher just couldn't tell
+            // this is the same shot as one of the "Remote List" rows above (e.g. a heavy rename)
+            // — the mirror of that row's own Link… button.
+            Button { relinkMasterTarget = item.id } label: {
+                Label("Link…", systemImage: "link")
+            }
+            .liquidGlassButton(prominent: false)
+            .controlSize(.small)
+            .disabled(unmatchedRemoteItems.isEmpty)
+
+            // "Keep" for a one-way DaVinci/CSV import just dismisses the discrepancy; for Sheet
+            // Sync the equivalent resolution is "Push" — this local-only shot gets sent to the
+            // remote sheet on Resync (see remoteChangeCount / SheetSyncView.applySync).
+            Button(supportsPush ? "Push" : "Keep") { setMissingResolution(itemId: item.id, .keep) }
                 .controlSize(.small)
                 .liquidGlassButton(prominent: resolution == .keep)
             Button("Mark Removed") { setMissingResolution(itemId: item.id, .markRemoved) }
@@ -495,52 +532,6 @@ struct SyncReviewView: View {
                 .tint(.red)
         }
         .padding(.vertical, 6)
-    }
-
-    // MARK: - Matched
-
-    @ViewBuilder
-    private var matchedSection: some View {
-        if !visibleMatchedItems.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Label("\(visibleMatchedItems.count) Matched", systemImage: "checkmark.circle.fill")
-                    .font(.headline)
-                    .foregroundColor(.green)
-                VStack(spacing: 0) {
-                    ForEach(visibleMatchedItems) { item in
-                        HStack {
-                            Text(displayName(for: item.importedClip))
-                            Spacer()
-                            Text("Identical").font(.caption)
-                        }
-                        .padding(.vertical, 4)
-                        Divider()
-                    }
-                }
-                .foregroundColor(.secondary)
-                .padding(8)
-                .background(Color.green.opacity(0.08))
-                .cornerRadius(8)
-            }
-        }
-    }
-
-    // MARK: - Push (Sheet Sync only)
-
-    @ViewBuilder
-    private var pushSection: some View {
-        if !pushCandidates.isEmpty {
-            section(title: "New in Resolver — push to \(sourceLabel)", systemImage: "arrow.up.circle.fill", color: .blue) {
-                ForEach($pushCandidates) { $candidate in
-                    HStack {
-                        Toggle("", isOn: $candidate.selected).labelsHidden()
-                        Text(candidate.clip.vfxName).bold()
-                        Text(candidate.clip.tcIn).font(.caption).foregroundColor(.secondary)
-                        Spacer()
-                    }
-                }
-            }
-        }
     }
 
     // MARK: - Actions
@@ -590,6 +581,11 @@ struct SyncReviewView: View {
     }
 
     private func breakLink(itemId: UUID) {
+        // Capture the master clip being freed *before* mutating, then append its `.missing`
+        // entry as a separate step — appending to `mergeItems` from inside `mutate`'s inout
+        // closure (which already holds an exclusive access into the same array) would violate
+        // Swift's exclusivity rules.
+        let freedMaster = mergeItems.first(where: { $0.id == itemId })?.masterClip
         mutate(itemId: itemId) { item in
             item.masterClip = nil
             item.state = .new
@@ -597,6 +593,12 @@ struct SyncReviewView: View {
             item.matchConfidence = nil
             item.matchColumnScore = nil
             item.confirmedNew = false
+        }
+        if let freedMaster {
+            // Without this, the freed master clip would silently vanish from the review instead
+            // of reappearing under "Needs a Match" — `.missing` items are a frozen snapshot taken
+            // at comparison time, not live-recomputed, so nothing else would surface it again.
+            mergeItems.append(MergeItem(masterClip: freedMaster, importedClip: nil, state: .missing))
         }
     }
 
@@ -610,17 +612,11 @@ struct SyncReviewView: View {
                 item.state = item.diffKeys.isEmpty ? .identical : .modified
             }
         }
+        // This master clip may have had its own `.missing` ("needs a match") entry — now that
+        // it's properly claimed by `itemId`, that entry is stale and would otherwise duplicate
+        // the shot (once as a real pair, once as still-unmatched).
+        mergeItems.removeAll { $0.state == .missing && $0.masterClip?.id == masterClip.id }
         relinkTarget = nil
-    }
-
-    private func reconcilePushCandidates() {
-        guard supportsPush else { return }
-        let unclaimed = MergeManager.unclaimedMasterClips(master: allMasterClips, mergeItems: mergeItems)
-        let existing = Dictionary(uniqueKeysWithValues: pushCandidates.map { ($0.clip.id, $0) })
-        let reconciled = unclaimed.map { existing[$0.id] ?? PushCandidate(clip: $0) }
-        if reconciled.map(\.clip.id) != pushCandidates.map(\.clip.id) || reconciled.count != pushCandidates.count {
-            pushCandidates = reconciled
-        }
     }
 
     @ViewBuilder
@@ -640,6 +636,10 @@ private struct IdentifiedMergeItem: Identifiable {
     let item: MergeItem
     var id: UUID { item.id }
     var candidateMasterClips: [ClipData] { item.candidateMasterClips }
+    // Only meaningful when this wraps a `.missing` item (a "Needs a Match — VFX Master List" row)
+    // — its own master clip, to hand to `link(itemId:to:)` once the user picks which unmatched
+    // remote item it actually corresponds to.
+    var masterClipForLink: ClipData { item.masterClip ?? ClipData() }
     init(_ item: MergeItem) { self.item = item }
 }
 
@@ -685,6 +685,65 @@ private struct RelinkPickerSheet: View {
                     ForEach(filtered) { clip in
                         Button { onPick(clip); dismiss() } label: {
                             Text(clip.vfxName)
+                        }
+                    }
+                }
+            }
+            .frame(minHeight: 300)
+
+            Divider()
+
+            HStack {
+                Button("Cancel", role: .cancel) { onCancel(); dismiss() }
+                    .keyboardShortcut(.escape, modifiers: [])
+                Spacer()
+            }
+        }
+        .padding()
+        .frame(width: 420, height: 480)
+    }
+}
+
+// The mirror of RelinkPickerSheet — opened from a "Needs a Match — VFX Master List" row's Link…
+// button, listing unmatched *remote* items instead of master clips, so a shot the matcher
+// couldn't pair from either direction can be linked from whichever side the user happens to be
+// looking at.
+private struct RelinkToRemoteSheet: View {
+    let candidates: [MergeItem]
+    let displayName: (MergeItem) -> String
+    let onPick: (MergeItem) -> Void
+    let onCancel: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var searchText = ""
+
+    private var filtered: [MergeItem] {
+        guard !searchText.isEmpty else { return candidates }
+        return candidates.filter { displayName($0).localizedCaseInsensitiveContains(searchText) }
+    }
+
+    var body: some View {
+        VStack(spacing: 16) {
+            HStack {
+                Text("Link to Remote Shot").font(.title2).bold()
+                Spacer()
+            }
+
+            HStack {
+                Image(systemName: "magnifyingglass").foregroundColor(.secondary)
+                TextField("Search...", text: $searchText).textFieldStyle(.plain)
+            }
+            .padding(8)
+            .liquidGlassPanel(cornerRadius: 8)
+
+            List {
+                Section("Unmatched Remote Shots") {
+                    if filtered.isEmpty {
+                        Text("Nothing unmatched on the remote side.").foregroundColor(.secondary)
+                    }
+                    ForEach(filtered) { item in
+                        Button { onPick(item); dismiss() } label: {
+                            Text(displayName(item))
                         }
                     }
                 }

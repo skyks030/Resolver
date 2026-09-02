@@ -116,7 +116,9 @@ class MergeManager {
     /// rather than cached, so breaking a link (or a fresh compare) is always reflected correctly.
     /// Excludes already-removed clips — those are archived and no longer part of any comparison.
     static func unclaimedMasterClips(master: [ClipData], mergeItems: [MergeItem]) -> [ClipData] {
-        let claimed = Set(mergeItems.compactMap { $0.masterClip?.id })
+        // A `.missing` item's own masterClip is precisely a shot that still needs a match —
+        // it must not count as "claimed" or it could never be offered as a relink candidate.
+        let claimed = Set(mergeItems.compactMap { $0.state == .missing ? nil : $0.masterClip?.id })
         return master.filter { !claimed.contains($0.id) && !$0.isRemoved }
     }
 
@@ -329,11 +331,12 @@ class MergeManager {
         }
     }
 
-    /// Wraps every currently-unclaimed master clip as a `.missing` item — used only by the
-    /// DaVinci/CSV import review (a one-way read of "what currently exists"), so a shot Resolve
-    /// no longer has surfaces as a discrepancy instead of silently staying untouched forever.
-    /// Sheet Sync deliberately does not call this — its local-only rows are "not yet pushed",
-    /// not "deleted remotely", and stay in the push section instead.
+    /// Wraps every currently-unclaimed master clip as a `.missing` item, so it surfaces as a
+    /// discrepancy in the shared "Needs a Match — VFX Master List" pool (SyncReviewView) instead
+    /// of silently staying untouched forever. Used by both review contexts, with a different
+    /// meaning for the same `.keep` resolution: for a DaVinci/CSV import (a one-way read of "what
+    /// currently exists") it just dismisses the discrepancy; for Sheet Sync it means "push this
+    /// shot out" (see SheetSyncView.applySync) — `.markRemoved` means the same thing either way.
     static func missingItems(master: [ClipData], mergeItems: [MergeItem]) -> [MergeItem] {
         unclaimedMasterClips(master: master, mergeItems: mergeItems).map {
             MergeItem(masterClip: $0, importedClip: nil, state: .missing)

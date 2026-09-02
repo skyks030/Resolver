@@ -23,7 +23,6 @@ struct SheetSyncView: View {
 
     @State private var showReview = false
     @State private var reviewMergeItems: [MergeItem] = []
-    @State private var reviewPushCandidates: [PushCandidate] = []
     // Which pinned sheet Compare Now was last pressed for — drives both the review sheet's
     // labeling and, on Apply, which sheet gets written back to.
     @State private var activeSheetId: UUID? = nil
@@ -105,7 +104,6 @@ struct SheetSyncView: View {
                 allMasterClips: projectManager.currentMasterList,
                 sourceLabel: activeSheet.map { "\(kind(of: $0).displayName) — \($0.title.isEmpty ? "Untitled Sheet" : $0.title)" } ?? selectedProvider.displayName,
                 supportsPush: true,
-                pushCandidates: $reviewPushCandidates,
                 onApply: {
                     showReview = false
                     applySync()
@@ -275,14 +273,18 @@ struct SheetSyncView: View {
 
                 let remoteClips = result.rows.map { ClipData(dict: $0) }
                 let master = projectManager.currentMasterList
-                let items = MergeManager.compareColumnAware(master: master, imported: remoteClips)
-                let localOnly = MergeManager.unclaimedMasterClips(master: master, mergeItems: items)
+                var items = MergeManager.compareColumnAware(master: master, imported: remoteClips)
+                // Local-only master clips now surface the same way a DaVinci import's do — as
+                // `.missing` items in the shared "Needs a Match" pool, resolved as Push or Mark
+                // Removed (see SyncReviewView.missingRow) — rather than a separate push-candidate
+                // list down in its own section.
+                let missing = MergeManager.missingItems(master: master, mergeItems: items)
+                items += missing
 
                 reviewMergeItems = items
-                reviewPushCandidates = localOnly.map { PushCandidate(clip: $0) }
                 isBusy = false
                 statusMessage = ""
-                ConsoleLogger.shared.log("✅ Sheet Sync: fetched \(result.rows.count) row(s) from '\(result.sheetName)', \(items.filter { $0.state == .new }.count) new, \(items.filter { $0.state == .modified }.count) modified, \(localOnly.count) local-only")
+                ConsoleLogger.shared.log("✅ Sheet Sync: fetched \(result.rows.count) row(s) from '\(result.sheetName)', \(items.filter { $0.state == .new }.count) new, \(items.filter { $0.state == .modified }.count) modified, \(missing.count) local-only")
                 showReview = true
             } catch {
                 isBusy = false
@@ -311,12 +313,15 @@ struct SheetSyncView: View {
             }
         }
 
-        // Push: local-only rows kept selected, plus any resolved conflict where at least one
-        // field kept the local value — that field needs writing back out to the sheet so it
-        // converges to the same merged row Resolver now has (per-field, not whole-row-only).
+        // Push: local-only shots resolved as "Push" (missingRow's Sheet Sync framing of `.keep`),
+        // plus any resolved conflict where at least one field kept the local value — that field
+        // needs writing back out to the sheet so it converges to the same merged row Resolver now
+        // has (per-field, not whole-row-only).
         var rowsToPush: [[String: String]] = []
-        for candidate in reviewPushCandidates where candidate.selected {
-            rowsToPush.append(sheetRow(for: candidate.clip))
+        for item in reviewMergeItems where item.state == .missing && item.missingResolution == .keep {
+            guard let masterClip = item.masterClip,
+                  let current = newMaster.first(where: { $0.id == masterClip.id }) else { continue }
+            rowsToPush.append(sheetRow(for: current))
         }
         for item in reviewMergeItems where item.state == .modified {
             guard item.fieldWinners.values.contains(.master), let masterClip = item.masterClip,
