@@ -1055,6 +1055,21 @@ struct ProjectExportView: View {
     // anything shouldn't leave a no-op entry on the undo stack.
     private func commitEditingCell() {
         if let snapshot = cellEditSnapshot, snapshot != projectManager.currentMasterList {
+            // Editing "TC In" (including on a freshly-added, previously TC-less clip) keeps that
+            // one clip's Episode/Scene assignment in sync with its Record TC — the same
+            // range-matching the Episode/Scene Managers' "OK" button recomputes in bulk, and that
+            // indexing/import already applies as a fallback. Folded into this same undo step, so
+            // undoing the TC edit reverts the resulting Episode/Scene change with it.
+            if let cellId = editingCell, cellId.col == "TC In",
+               let idx = projectManager.currentMasterList.firstIndex(where: { $0.id == cellId.clipId }) {
+                let tc = projectManager.currentMasterList[idx].tcIn
+                if !projectManager.currentEpisodes.isEmpty, let number = EpisodeData.matchedEpisodeNumber(for: tc, in: projectManager.currentEpisodes) {
+                    projectManager.currentMasterList[idx].dict["Episode"] = String(number)
+                }
+                if !projectManager.currentScenes.isEmpty, let name = SceneData.matchedSceneName(for: tc, in: projectManager.currentScenes) {
+                    projectManager.currentMasterList[idx].dict["Scene"] = name
+                }
+            }
             projectManager.saveMasterList()
             projectManager.registerUndo(\.currentMasterList, actionName: "Edit Cell", from: snapshot) {
                 self.projectManager.saveMasterList()

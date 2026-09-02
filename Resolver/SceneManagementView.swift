@@ -148,9 +148,29 @@ struct SceneManagementView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
                 }
+                ToolbarItem(placement: .primaryAction) {
+                    Button("OK") { confirmAndClose() }
+                        .liquidGlassButton(prominent: true)
+                        .keyboardShortcut(.defaultAction)
+                }
             }
         }
         .frame(minWidth: 400, minHeight: 400)
+    }
+
+    // "OK": confirms the current scene arrangement and — unlike just "Close" — propagates it into
+    // the master list by recomputing every clip's "Scene" column from its Record TC against the
+    // (possibly just-edited) scene Start TC ranges. A no-op on the master list if no scenes are
+    // registered (recomputeSceneColumn already guards that).
+    private func confirmAndClose() {
+        let oldList = projectManager.currentMasterList
+        projectManager.recomputeSceneColumn()
+        if projectManager.currentMasterList != oldList {
+            projectManager.registerUndo(\.currentMasterList, actionName: "Recompute Scenes", from: oldList) {
+                self.projectManager.saveMasterList()
+            }
+        }
+        dismiss()
     }
 
     private func deleteScenes(at offsets: IndexSet) {

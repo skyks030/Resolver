@@ -103,13 +103,19 @@ struct EpisodeManagementView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
                 }
-                ToolbarItem(placement: .primaryAction) {
+                ToolbarItemGroup(placement: .primaryAction) {
                     Button {
                         indexTimelines()
                     } label: {
                         Label("Re-Index", systemImage: "arrow.clockwise")
                     }
                     .disabled(isIndexing)
+
+                    Button("OK") {
+                        confirmAndClose()
+                    }
+                    .liquidGlassButton(prominent: true)
+                    .keyboardShortcut(.defaultAction)
                 }
             }
         }
@@ -205,6 +211,21 @@ struct EpisodeManagementView: View {
         for i in projectManager.currentEpisodes.indices {
             projectManager.currentEpisodes[i].episodeNumber = i + 1
         }
+    }
+
+    // "OK": confirms the current episode arrangement and — unlike just "Close" — propagates it
+    // into the master list by recomputing every clip's "Episode" column from its Record TC
+    // against the (possibly just-reordered/edited) episode Start TC ranges. A no-op on the master
+    // list if no episodes are registered (recomputeEpisodeColumn already guards that).
+    private func confirmAndClose() {
+        let oldList = projectManager.currentMasterList
+        projectManager.recomputeEpisodeColumn()
+        if projectManager.currentMasterList != oldList {
+            projectManager.registerUndo(\.currentMasterList, actionName: "Recompute Episodes", from: oldList) {
+                self.projectManager.saveMasterList()
+            }
+        }
+        dismiss()
     }
 
     private func deleteEpisode(_ episode: EpisodeData) {

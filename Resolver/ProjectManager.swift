@@ -528,6 +528,35 @@ class ProjectManager: ObservableObject {
         }
     }
     
+    // Recomputes the "Episode" column for every clip in the master list from its Record TC In
+    // against the registered episodes' Start TC ranges (EpisodeData.matchedEpisodeNumber — same
+    // range-matching used to fill in Episode during indexing/import). A no-op when no episodes
+    // are registered. This is an explicit, user-triggered recompute (Episode Manager's "OK"
+    // button) — it overwrites any existing "Episode" value, since episode boundaries may have
+    // just changed (reordered, Start TC edited, etc.), unlike the fill-only-if-empty fallback
+    // used during CSV/DaVinci import augmentation.
+    func recomputeEpisodeColumn() {
+        guard !currentEpisodes.isEmpty else { return }
+        for i in currentMasterList.indices {
+            if let number = EpisodeData.matchedEpisodeNumber(for: currentMasterList[i].tcIn, in: currentEpisodes) {
+                currentMasterList[i].dict["Episode"] = String(number)
+            }
+        }
+        saveMasterList()
+    }
+
+    // Same idea as recomputeEpisodeColumn, for the "Scene" column via SceneData.matchedSceneName —
+    // Scene Manager's "OK" button.
+    func recomputeSceneColumn() {
+        guard !currentScenes.isEmpty else { return }
+        for i in currentMasterList.indices {
+            if let name = SceneData.matchedSceneName(for: currentMasterList[i].tcIn, in: currentScenes) {
+                currentMasterList[i].dict["Scene"] = name
+            }
+        }
+        saveMasterList()
+    }
+
     func updateMasterList(with clips: [ClipData], sceneMarkers: [MarkerData] = []) {
         currentMasterList = clips
         saveMasterList() // Save CSV immediately
